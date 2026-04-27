@@ -6,7 +6,7 @@
 # docker-compose.yml
 services:
   mimic-server:
-    image: ghcr.io/jvogel/mimic-tts:latest
+    image: ghcr.io/voglster/mimic-tts:latest
     ports: ["8000:8000"]
     volumes:
       - mimic-data:/data
@@ -32,7 +32,7 @@ where reference recordings live. Treat it as durable state.
 ## From source
 
 ```bash
-git clone https://github.com/jvogel/mimic-tts
+git clone https://github.com/voglster/mimic-tts
 cd mimic-tts
 uv sync --package mimic-server
 uv run mimic-server

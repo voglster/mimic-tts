@@ -15,7 +15,7 @@ ships with a tiny Python client, never sends a recording off your machine.
 docker run --gpus all \
   -p 8000:8000 \
   -v mimic-data:/data \
-  ghcr.io/jvogel/mimic-tts:latest
+  ghcr.io/voglster/mimic-tts:latest
 ```
 
 Or with `docker-compose.yml` from this repo:

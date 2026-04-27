@@ -5,7 +5,7 @@
 Requires Python 3.12 and `uv`.
 
 ```bash
-git clone https://github.com/jvogel/mimic-tts
+git clone https://github.com/voglster/mimic-tts
 cd mimic-tts
 uv sync --all-packages
 ```
