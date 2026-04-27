@@ -1,4 +1,3 @@
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -56,24 +55,43 @@ def test_health(runner):
     assert "ok" in r.stdout
 
 
-def test_say_writes_output_file(runner, tmp_path):
+def test_say_with_out_writes_file(runner, tmp_path):
+    """`mimic say <text> --out FILE` writes the wav and does NOT play."""
     fake = MagicMock()
-    out = tmp_path / "out.wav"
-    fake.tts_to_file.side_effect = lambda _text, path, **_kw: Path(path).write_bytes(
-        b"RIFF\x00\x00\x00\x00WAVEfmt " + b"\x00" * 100
-    )
+    fake.tts.return_value = b"RIFF\x00\x00\x00\x00WAVEfmt " + b"\x00" * 100
     fake.__enter__ = MagicMock(return_value=fake)
     fake.__exit__ = MagicMock(return_value=None)
-    with patch("mimic.cli.Client", return_value=fake):
+    out = tmp_path / "out.wav"
+    with (
+        patch("mimic.cli.Client", return_value=fake),
+        patch("mimic.cli._play_wav_bytes") as play_fn,
+    ):
         r = runner.invoke(app, ["say", "hello", "--out", str(out)])
     assert r.exit_code == 0, r.stdout
     assert out.exists()
-    fake.tts_to_file.assert_called_once()
+    fake.tts.assert_called_once()
+    play_fn.assert_not_called()
+
+
+def test_say_without_out_plays_audio(runner):
+    """`mimic say <text>` (no --out) plays the wav rather than writing a file."""
+    fake = MagicMock()
+    wav_bytes = b"RIFF\x00\x00\x00\x00WAVEfmt " + b"\x00" * 100
+    fake.tts.return_value = wav_bytes
+    fake.__enter__ = MagicMock(return_value=fake)
+    fake.__exit__ = MagicMock(return_value=None)
+    with (
+        patch("mimic.cli.Client", return_value=fake),
+        patch("mimic.cli._play_wav_bytes") as play_fn,
+    ):
+        r = runner.invoke(app, ["say", "hello"])
+    assert r.exit_code == 0, r.stdout
+    play_fn.assert_called_once_with(wav_bytes)
 
 
 def test_say_default_voice_from_config(runner, tmp_path):
     fake = MagicMock()
-    fake.tts_to_file.return_value = tmp_path / "out.wav"
+    fake.tts.return_value = b"RIFF" + b"\x00" * 100
     fake.__enter__ = MagicMock(return_value=fake)
     fake.__exit__ = MagicMock(return_value=None)
     out = tmp_path / "out.wav"
@@ -81,9 +99,8 @@ def test_say_default_voice_from_config(runner, tmp_path):
     with patch("mimic.cli.Client", return_value=fake):
         r = runner.invoke(app, ["say", "hello", "--out", str(out)])
     assert r.exit_code == 0, r.stdout
-    fake.tts_to_file.assert_called_once()
-    kwargs = fake.tts_to_file.call_args.kwargs
-    assert kwargs["speaker"] == "Aiden"
+    fake.tts.assert_called_once()
+    assert fake.tts.call_args.kwargs["speaker"] == "Aiden"
 
 
 def test_say_unknown_voice_routes_to_clone(runner, tmp_path):
@@ -97,20 +114,40 @@ def test_say_unknown_voice_routes_to_clone(runner, tmp_path):
         r = runner.invoke(app, ["say", "hello", "--voice", "jim", "--out", str(out)])
     assert r.exit_code == 0, r.stdout
     fake.clone_tts.assert_called_once_with("jim", "hello", language="English")
-    fake.tts_to_file.assert_not_called()
+    fake.tts.assert_not_called()
     assert out.exists()
 
 
-def test_clone_say(runner, tmp_path):
+def test_clone_say_with_out_writes_file(runner, tmp_path):
     fake = MagicMock()
     fake.clone_tts.return_value = b"RIFF" + b"\x00" * 100
     fake.__enter__ = MagicMock(return_value=fake)
     fake.__exit__ = MagicMock(return_value=None)
     out = tmp_path / "out.wav"
-    with patch("mimic.cli.Client", return_value=fake):
+    with (
+        patch("mimic.cli.Client", return_value=fake),
+        patch("mimic.cli._play_wav_bytes") as play_fn,
+    ):
         r = runner.invoke(app, ["clone", "say", "alice", "hello", "--out", str(out)])
     assert r.exit_code == 0, r.stdout
     fake.clone_tts.assert_called_once_with("alice", "hello", language="English")
+    assert out.exists()
+    play_fn.assert_not_called()
+
+
+def test_clone_say_without_out_plays_audio(runner):
+    fake = MagicMock()
+    wav_bytes = b"RIFF" + b"\x00" * 100
+    fake.clone_tts.return_value = wav_bytes
+    fake.__enter__ = MagicMock(return_value=fake)
+    fake.__exit__ = MagicMock(return_value=None)
+    with (
+        patch("mimic.cli.Client", return_value=fake),
+        patch("mimic.cli._play_wav_bytes") as play_fn,
+    ):
+        r = runner.invoke(app, ["clone", "say", "alice", "hello"])
+    assert r.exit_code == 0, r.stdout
+    play_fn.assert_called_once_with(wav_bytes)
 
 
 def test_record_with_audio_and_text_skips_recorder(runner, tmp_path):

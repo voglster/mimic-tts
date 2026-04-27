@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import sys
 import threading
-from pathlib import Path
+from pathlib import Path  # noqa: TC003 — typer evaluates annotations at runtime
 from typing import Annotated
 
 import typer
@@ -45,25 +45,40 @@ BUILTIN_VOICE_NAMES: frozenset[str] = frozenset(
 )
 
 
+def _play_wav_bytes(wav: bytes) -> None:
+    """Decode a WAV byte string and play it through the default output device."""
+    import io as _io
+
+    import soundfile as _sf
+
+    audio, sr = _sf.read(_io.BytesIO(wav), dtype="float32", always_2d=True)
+    play(audio, sr)
+
+
 @app.command()
 def say(
     text: Annotated[str, typer.Argument(help="Text to synthesize.")],
     voice: Annotated[
         str | None, typer.Option(help="Built-in voice or registered clone name.")
     ] = None,
-    out: Annotated[Path, typer.Option(help="Output wav path.")] = Path("out.wav"),
+    out: Annotated[
+        Path | None, typer.Option(help="Write WAV to this path instead of playing.")
+    ] = None,
     language: Annotated[str, typer.Option()] = "English",
 ) -> None:
-    """Synthesize speech. Routes to a built-in voice or a registered clone by name."""
+    """Synthesize speech and play it. Pass --out FILE to save instead of play."""
     cfg = load_config()
     speaker = voice or cfg.default_voice
     with _client() as c:
         if speaker in BUILTIN_VOICE_NAMES:
-            c.tts_to_file(text, out, speaker=speaker, language=language)
+            audio = c.tts(text, speaker=speaker, language=language)
         else:
             audio = c.clone_tts(speaker, text, language=language)
-            out.write_bytes(audio)
-    typer.echo(f"wrote {out}")
+    if out is None:
+        _play_wav_bytes(audio)
+    else:
+        out.write_bytes(audio)
+        typer.echo(f"wrote {out}")
 
 
 @app.command()
@@ -122,14 +137,19 @@ def record(
 def clone_say(
     name: Annotated[str, typer.Argument(help="Registered clone name.")],
     text: Annotated[str, typer.Argument()],
-    out: Annotated[Path, typer.Option(help="Output wav path.")] = Path("out.wav"),
+    out: Annotated[
+        Path | None, typer.Option(help="Write WAV to this path instead of playing.")
+    ] = None,
     language: Annotated[str, typer.Option()] = "English",
 ) -> None:
-    """Synthesize speech using a registered clone voice."""
+    """Synthesize speech using a registered clone voice and play it."""
     with _client() as c:
         audio = c.clone_tts(name, text, language=language)
-    out.write_bytes(audio)
-    typer.echo(f"wrote {out}")
+    if out is None:
+        _play_wav_bytes(audio)
+    else:
+        out.write_bytes(audio)
+        typer.echo(f"wrote {out}")
 
 
 def _interactive_record_and_register(name: str) -> None:
