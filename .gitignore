@@ -10,5 +10,23 @@ wheels/
 .venv
 
 # Voice reference samples (personal data — don't commit recordings)
+server/reference/*
+!server/reference/.gitkeep
 reference/*
 !reference/.gitkeep
+
+# Build artifacts
+dist/
+*.egg-info/
+
+# Local secrets / env
+.env
+.env.local
+
+# IDE / OS junk
+.DS_Store
+.idea/
+.vscode/
+
+# Audio recordings outside the reference dir
+/*.wav

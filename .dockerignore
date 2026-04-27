@@ -1,0 +1,15 @@
+.git/
+.github/
+.venv/
+__pycache__/
+*.py[oc]
+build/
+dist/
+*.egg-info/
+docs/
+client/
+reference/
+*.wav
+.env
+.env.local
+.DS_Store
