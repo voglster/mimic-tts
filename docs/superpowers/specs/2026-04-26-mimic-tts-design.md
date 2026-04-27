@@ -51,7 +51,7 @@ mimic-tts/
 │   ├── client.md
 │   └── self-hosting.md
 ├── release.sh                    # adapted from lumbergh
-├── lint.sh
+├── lint.sh                       # adapted from lumbergh (ruff format/check + mypy)
 ├── docker-compose.yml            # example one-command server run
 ├── README.md                     # project landing — quickstart for both
 ├── LICENSE                       # MIT
