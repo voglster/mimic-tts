@@ -1,73 +1,109 @@
-# qwen3-tts-api
+# mimic-tts
 
-A small FastAPI server wrapping [Qwen3-TTS](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base) for voice cloning and synthesis. Drop-in replacement for `edge-tts` plus voice-cloning endpoints.
+Self-hosted **Qwen3-TTS** voice cloning + synthesis. Runs on your own GPU,
+ships with a tiny Python client, never sends a recording off your machine.
 
-Models load on demand and unload after 15s idle so the GPU can be shared with other workloads (e.g. an Ollama instance).
+- Server — Docker image with on-demand model loading + idle unload.
+- Client — `pip install mimic-tts` for a `mimic` CLI and a Python
+  library (sync **and** async).
+- Voice cloning — record a 10-second sample, register it, synthesize.
+- Optional bearer auth — single env var flips it on.
 
-## Requirements
-
-- Python 3.12
-- CUDA GPU (tested on RTX 4090, ~6GB VRAM per loaded model)
-- [`uv`](https://docs.astral.sh/uv/)
-
-## Quick start (Docker)
-
-```bash
-docker compose up --build
-curl -X POST http://localhost:8000/tts -F 'text=Hello there.' --output out.wav
-```
-
-> Requires NVIDIA GPU + nvidia-container-toolkit. The full README is being rewritten as part of the mimic-tts rebrand.
-
-## Install & run
+## Quick start (server, Docker)
 
 ```bash
-uv sync
-uv run uvicorn main:app --host 0.0.0.0 --port 8000
+docker run --gpus all \
+  -p 8000:8000 \
+  -v mimic-data:/data \
+  ghcr.io/jvogel/mimic-tts:latest
 ```
 
-## Endpoints
-
-### `POST /tts` — built-in voices (edge-tts compatible)
-Form fields: `text`, `language` (default `English`), `speaker` (default `Ryan`), `instruct` (optional style prompt).
-Returns: `audio/wav`.
+Or with `docker-compose.yml` from this repo:
 
 ```bash
-curl -X POST http://localhost:8000/tts \
-  -F 'text=Hello there, friend.' \
-  -F 'speaker=Ryan' \
-  --output out.wav
+docker compose up
 ```
 
-### `POST /clone/register` — register a reference voice
-Form: `ref_audio` (file, ~3+s wav), `ref_text` (the transcript), `name` (default `default`).
-The reference is persisted under `reference/<name>/` and loaded again on subsequent calls.
+Requires NVIDIA GPU + nvidia-container-toolkit. First run downloads ~7GB of
+Qwen3-TTS weights into the `/data` volume; subsequent runs are fast.
 
-### `POST /clone/tts` — synthesize using a registered voice
-Form: `text`, `language`, `name`.
+## Quick start (client)
 
-### `POST /clone/oneshot` — clone + synthesize in one request
-Form: `text`, `language`, `ref_audio`, `ref_text`. Slower per call; convenient for ad-hoc use.
+```bash
+pip install mimic-tts
 
-### `GET /voices`
-List built-in voices.
+mimic say "hello, this is a test" --out hello.wav
+mimic record alice                       # interactive: record + register a clone
+mimic clone say alice "now I sound like alice"
+mimic voices                             # list built-in voices
+mimic clones                             # list registered clones
+```
 
-### `GET /clone/voices`
-List registered clone voices.
+The client reads `MIMIC_SERVER_URL` from the environment, or
+`~/.config/mimic/config.toml`:
 
-### `GET /health`
-Returns currently loaded models and registered voices.
+```toml
+server_url = "http://nas.local:8000"
+token = "optional-bearer-token"
+default_voice = "Ryan"
+```
+
+### Python library
+
+```python
+# Sync
+from mimic import Client
+with Client() as c:
+    c.tts_to_file("hello there", "out.wav", speaker="Ryan")
+
+# Async
+from mimic import AsyncClient
+async with AsyncClient() as c:
+    audio = await c.tts("hello there")
+```
+
+## Endpoints (server)
+
+| Method | Path                | What it does                                |
+|--------|---------------------|---------------------------------------------|
+| `POST` | `/tts`              | Built-in voice TTS (drop-in for `edge-tts`) |
+| `POST` | `/clone/register`   | Register a reference voice (file + transcript) |
+| `POST` | `/clone/tts`        | Synthesize using a registered clone         |
+| `POST` | `/clone/oneshot`    | Clone + synthesize in one call              |
+| `GET`  | `/voices`           | List built-in voices                        |
+| `GET`  | `/clone/voices`     | List registered clone voices                |
+| `GET`  | `/health`           | Loaded models + registered voices (always open) |
+
+Set `MIMIC_API_TOKEN=...` to require `Authorization: Bearer ...` on every
+endpoint except `/health`. Off by default.
 
 ## Built-in voices
 
-`Ryan`, `Aiden` (English) · `Vivian`, `Serena`, `Uncle_Fu`, `Dylan`, `Eric` (Chinese) · `Ono_Anna` (Japanese) · `Sohee` (Korean).
+| Voice      | Language |
+|------------|----------|
+| Ryan, Aiden | English |
+| Vivian, Serena, Uncle_Fu, Dylan, Eric | Chinese |
+| Ono_Anna   | Japanese |
+| Sohee      | Korean   |
 
-## Notes
+## Privacy
 
-- The first call after idle takes ~10s to load the model. Subsequent calls are fast.
-- Models unload automatically after 15 seconds of inactivity (`UNLOAD_AFTER` in `main.py`).
-- Reference audio in `reference/` is gitignored — bring your own.
+Reference recordings are stored locally on the server in
+`MIMIC_REFERENCE_DIR` (default: `./reference`, or `/data/reference` in
+Docker). They are not transmitted anywhere. The `.gitignore` excludes them
+by default — you would have to add them deliberately to commit them.
+
+## Documentation
+
+- [Server reference](docs/server.md) — env vars, endpoints, GPU notes
+- [Client reference](docs/client.md) — CLI, library, recording tips
+- [Self-hosting guide](docs/self-hosting.md) — docker-compose, reverse proxy, auth
+
+## Acknowledgements
+
+Built on top of [Qwen3-TTS](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base)
+by the Qwen Team. See `NOTICE` for full attribution.
 
 ## License
 
-MIT
+MIT. See `LICENSE`.
