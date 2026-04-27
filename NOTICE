@@ -1,0 +1,18 @@
+mimic-tts
+Copyright (c) 2026 Jim Vogel
+Licensed under the MIT License (see LICENSE).
+
+This product builds on:
+- Qwen3-TTS by the Qwen Team (Alibaba):
+    https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base
+    https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice
+  Models are downloaded at runtime to a user-controlled cache directory and
+  are not redistributed by this project. See the upstream model cards for
+  their license terms.
+
+- FastAPI, httpx, typer, sounddevice, soundfile, numpy, pydantic-settings,
+  platformdirs — all under their respective open-source licenses.
+
+This project does not transmit voice recordings to any third party.
+Reference recordings registered through `/clone/register` are stored locally
+in the directory configured via MIMIC_REFERENCE_DIR (default: ./reference).
