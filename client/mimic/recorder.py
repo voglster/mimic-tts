@@ -1,4 +1,9 @@
-"""Microphone recording flow for the `mimic record` CLI command."""
+"""Microphone recording flow for the `mimic record` CLI command.
+
+`sounddevice` is imported lazily so this module loads cleanly on machines
+without PortAudio (CI runners, containers, etc.). Only the actual recording
+and playback paths need it.
+"""
 
 from __future__ import annotations
 
@@ -8,10 +13,11 @@ from dataclasses import dataclass
 from typing import IO, TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+    from contextlib import AbstractContextManager
     from pathlib import Path
 
 import numpy as np
-import sounddevice as sd
 import soundfile as sf
 
 PROMPT_SCRIPTS: tuple[str, ...] = (
@@ -39,25 +45,33 @@ def pick_script(rng: random.Random | None = None) -> str:
     return (rng or random).choice(PROMPT_SCRIPTS)
 
 
+def _default_stream_factory() -> Callable[..., AbstractContextManager[object]]:
+    import sounddevice as sd
+
+    return sd.InputStream
+
+
 def record_until_enter(
     *,
     sample_rate: int = DEFAULT_SAMPLE_RATE,
     channels: int = DEFAULT_CHANNELS,
     max_seconds: float = 30.0,
     stop_event: threading.Event | None = None,
+    stream_factory: Callable[..., AbstractContextManager[object]] | None = None,
 ) -> RecordingResult:
-    """Capture audio from the default mic until `stop_event` fires or max_seconds elapses."""
+    """Capture audio from the default mic until `stop_event` fires or max_seconds elapses.
+
+    `stream_factory` is the callable used to build the input stream — defaults to
+    `sounddevice.InputStream`. Tests pass a fake to avoid the PortAudio dependency.
+    """
     stop = stop_event or threading.Event()
     chunks: list[np.ndarray] = []
 
     def callback(indata: np.ndarray, _frames: int, _time_info: object, _status: object) -> None:
         chunks.append(indata.copy())
 
-    with sd.InputStream(
-        samplerate=sample_rate,
-        channels=channels,
-        callback=callback,
-    ):
+    factory = stream_factory or _default_stream_factory()
+    with factory(samplerate=sample_rate, channels=channels, callback=callback):
         stop.wait(timeout=max_seconds)
 
     audio = np.concatenate(chunks, axis=0) if chunks else np.zeros((0, channels), np.float32)
@@ -71,5 +85,7 @@ def save_wav(out: Path | str | IO[bytes], audio: np.ndarray, *, sample_rate: int
 
 def play(audio: np.ndarray, sample_rate: int) -> None:
     """Block until playback finishes. Used by the CLI for review."""
+    import sounddevice as sd
+
     sd.play(audio, samplerate=sample_rate)
     sd.wait()

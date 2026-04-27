@@ -25,7 +25,7 @@ def test_pick_script_is_deterministic_with_seeded_rng():
     assert a == b
 
 
-def test_record_until_enter_collects_audio_until_signal_set(monkeypatch):
+def test_record_until_enter_collects_audio_until_signal_set():
     fake_chunks = [
         np.array([[0.1], [0.2]], dtype=np.float32),
         np.array([[0.3], [0.4]], dtype=np.float32),
@@ -43,8 +43,6 @@ def test_record_until_enter_collects_audio_until_signal_set(monkeypatch):
         def __exit__(self, *exc):
             return False
 
-    monkeypatch.setattr("mimic.recorder.sd.InputStream", FakeStream)
-
     stop = MagicMock()
     stop.wait.return_value = None
 
@@ -53,6 +51,7 @@ def test_record_until_enter_collects_audio_until_signal_set(monkeypatch):
         channels=1,
         max_seconds=30,
         stop_event=stop,
+        stream_factory=FakeStream,
     )
 
     assert isinstance(result, RecordingResult)
