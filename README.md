@@ -10,6 +10,15 @@ Models load on demand and unload after 15s idle so the GPU can be shared with ot
 - CUDA GPU (tested on RTX 4090, ~6GB VRAM per loaded model)
 - [`uv`](https://docs.astral.sh/uv/)
 
+## Quick start (Docker)
+
+```bash
+docker compose up --build
+curl -X POST http://localhost:8000/tts -F 'text=Hello there.' --output out.wav
+```
+
+> Requires NVIDIA GPU + nvidia-container-toolkit. The full README is being rewritten as part of the mimic-tts rebrand.
+
 ## Install & run
 
 ```bash

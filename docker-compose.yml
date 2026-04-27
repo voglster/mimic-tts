@@ -1,0 +1,24 @@
+services:
+  mimic-server:
+    build:
+      context: .
+      dockerfile: server/Dockerfile
+    image: mimic-tts:dev
+    ports:
+      - "8000:8000"
+    volumes:
+      - mimic-data:/data
+    environment:
+      MIMIC_LOG_LEVEL: INFO
+      # MIMIC_API_TOKEN: change-me   # uncomment to require bearer auth
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+volumes:
+  mimic-data:
