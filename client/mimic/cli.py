@@ -30,18 +30,39 @@ def _client() -> Client:
     return Client(server_url=cfg.server_url, token=cfg.token)
 
 
+BUILTIN_VOICE_NAMES: frozenset[str] = frozenset(
+    {
+        "Ryan",
+        "Aiden",
+        "Vivian",
+        "Serena",
+        "Uncle_Fu",
+        "Dylan",
+        "Eric",
+        "Ono_Anna",
+        "Sohee",
+    }
+)
+
+
 @app.command()
 def say(
     text: Annotated[str, typer.Argument(help="Text to synthesize.")],
-    voice: Annotated[str | None, typer.Option(help="Speaker name.")] = None,
+    voice: Annotated[
+        str | None, typer.Option(help="Built-in voice or registered clone name.")
+    ] = None,
     out: Annotated[Path, typer.Option(help="Output wav path.")] = Path("out.wav"),
     language: Annotated[str, typer.Option()] = "English",
 ) -> None:
-    """Synthesize speech with a built-in voice."""
+    """Synthesize speech. Routes to a built-in voice or a registered clone by name."""
     cfg = load_config()
     speaker = voice or cfg.default_voice
     with _client() as c:
-        c.tts_to_file(text, out, speaker=speaker, language=language)
+        if speaker in BUILTIN_VOICE_NAMES:
+            c.tts_to_file(text, out, speaker=speaker, language=language)
+        else:
+            audio = c.clone_tts(speaker, text, language=language)
+            out.write_bytes(audio)
     typer.echo(f"wrote {out}")
 
 

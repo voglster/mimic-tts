@@ -86,6 +86,21 @@ def test_say_default_voice_from_config(runner, tmp_path):
     assert kwargs["speaker"] == "Aiden"
 
 
+def test_say_unknown_voice_routes_to_clone(runner, tmp_path):
+    """`mimic say --voice <name>` for a non-builtin name should hit /clone/tts."""
+    fake = MagicMock()
+    fake.clone_tts.return_value = b"RIFF" + b"\x00" * 100
+    fake.__enter__ = MagicMock(return_value=fake)
+    fake.__exit__ = MagicMock(return_value=None)
+    out = tmp_path / "out.wav"
+    with patch("mimic.cli.Client", return_value=fake):
+        r = runner.invoke(app, ["say", "hello", "--voice", "jim", "--out", str(out)])
+    assert r.exit_code == 0, r.stdout
+    fake.clone_tts.assert_called_once_with("jim", "hello", language="English")
+    fake.tts_to_file.assert_not_called()
+    assert out.exists()
+
+
 def test_clone_say(runner, tmp_path):
     fake = MagicMock()
     fake.clone_tts.return_value = b"RIFF" + b"\x00" * 100

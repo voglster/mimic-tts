@@ -57,3 +57,16 @@ def test_tts_endpoint_returns_wav(tmp_path, fake_model):
     r = client.post("/tts", data={"text": "hello", "speaker": "Ryan"})
     assert r.status_code == 200
     assert r.headers["content-type"] == "audio/wav"
+
+
+def test_tts_unsupported_speaker_returns_400(tmp_path, fake_model):
+    """Qwen raises ValueError for unsupported built-in speakers; surface as 400 not 500."""
+    fake_model.generate_custom_voice.side_effect = ValueError(
+        "Unsupported speakers: ['jim']. Supported: ['ryan', ...]"
+    )
+    settings = Settings(reference_dir=tmp_path, api_token=None)
+    app = build_app(settings, model_loader=lambda _mid: fake_model)
+    client = TestClient(app)
+    r = client.post("/tts", data={"text": "hi", "speaker": "jim"})
+    assert r.status_code == 400
+    assert "jim" in r.json()["detail"]

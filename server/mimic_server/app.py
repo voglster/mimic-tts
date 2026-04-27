@@ -105,6 +105,14 @@ def _make_model_manager(
     return mm
 
 
+def _generate_builtin(model: Any, **kwargs: Any) -> tuple[Any, int]:
+    """Call generate_custom_voice; map Qwen's ValueError (unsupported speaker) to 400."""
+    try:
+        return model.generate_custom_voice(**kwargs)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e)) from e
+
+
 def _configure_environment(settings: Settings) -> None:
     """Apply environment-level settings (logging, HF_HOME, dirs)."""
     logging.basicConfig(level=settings.log_level)
@@ -167,7 +175,8 @@ def build_app(
         instruct: Annotated[str, Form()] = "",
     ):
         model = mm.get("custom")
-        wavs, sr = model.generate_custom_voice(
+        wavs, sr = _generate_builtin(
+            model,
             text=text,
             language=language,
             speaker=speaker,
