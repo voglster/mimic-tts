@@ -1,18 +1,20 @@
 """Model load/unload manager. Decoupled from Qwen3-TTS for testability."""
+
 from __future__ import annotations
 
 import asyncio
 import logging
 import threading
 import time
-from typing import Callable, Generic, TypeVar
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
 
-T = TypeVar("T")
 
-
-class ModelManager(Generic[T]):
+class ModelManager[T]:
     """Caches loaded models keyed by short name; unloads after idle."""
 
     def __init__(

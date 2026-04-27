@@ -2,7 +2,6 @@ from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-
 from mimic_server.app import build_app
 from mimic_server.config import Settings
 
@@ -18,7 +17,7 @@ def fake_model():
 
 def test_health_no_auth(tmp_path, fake_model):
     settings = Settings(reference_dir=tmp_path, api_token=None)
-    app = build_app(settings, model_loader=lambda mid: fake_model)
+    app = build_app(settings, model_loader=lambda _mid: fake_model)
     client = TestClient(app)
     r = client.get("/health")
     assert r.status_code == 200
@@ -27,31 +26,32 @@ def test_health_no_auth(tmp_path, fake_model):
 
 def test_voices_unauthenticated_when_no_token(tmp_path, fake_model):
     settings = Settings(reference_dir=tmp_path, api_token=None)
-    app = build_app(settings, model_loader=lambda mid: fake_model)
+    app = build_app(settings, model_loader=lambda _mid: fake_model)
     client = TestClient(app)
     assert client.get("/voices").status_code == 200
 
 
 def test_protected_route_rejects_without_token(tmp_path, fake_model):
-    settings = Settings(reference_dir=tmp_path, api_token="shhh")
-    app = build_app(settings, model_loader=lambda mid: fake_model)
+    settings = Settings(reference_dir=tmp_path, api_token="shhh")  # noqa: S106
+    app = build_app(settings, model_loader=lambda _mid: fake_model)
     client = TestClient(app)
     assert client.get("/voices").status_code == 401
 
 
 def test_health_remains_open_even_with_token(tmp_path, fake_model):
-    settings = Settings(reference_dir=tmp_path, api_token="shhh")
-    app = build_app(settings, model_loader=lambda mid: fake_model)
+    settings = Settings(reference_dir=tmp_path, api_token="shhh")  # noqa: S106
+    app = build_app(settings, model_loader=lambda _mid: fake_model)
     client = TestClient(app)
     assert client.get("/health").status_code == 200
 
 
 def test_tts_endpoint_returns_wav(tmp_path, fake_model):
     import numpy as np
+
     fake_model.generate_custom_voice.return_value = ([np.zeros(1024, dtype=np.float32)], 24000)
 
     settings = Settings(reference_dir=tmp_path, api_token=None)
-    app = build_app(settings, model_loader=lambda mid: fake_model)
+    app = build_app(settings, model_loader=lambda _mid: fake_model)
     client = TestClient(app)
 
     r = client.post("/tts", data={"text": "hello", "speaker": "Ryan"})

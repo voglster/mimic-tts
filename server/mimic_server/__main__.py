@@ -1,4 +1,5 @@
 """Console entry: `mimic-server` runs uvicorn with env-driven settings."""
+
 from __future__ import annotations
 
 import uvicorn

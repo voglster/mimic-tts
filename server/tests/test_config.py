@@ -4,8 +4,15 @@ from mimic_server.config import Settings
 
 
 def test_local_defaults(monkeypatch, tmp_path):
-    for k in ["MIMIC_DATA_DIR", "MIMIC_HOST", "MIMIC_PORT", "MIMIC_REFERENCE_DIR",
-              "MIMIC_MODEL_CACHE", "MIMIC_UNLOAD_AFTER", "MIMIC_API_TOKEN"]:
+    for k in [
+        "MIMIC_DATA_DIR",
+        "MIMIC_HOST",
+        "MIMIC_PORT",
+        "MIMIC_REFERENCE_DIR",
+        "MIMIC_MODEL_CACHE",
+        "MIMIC_UNLOAD_AFTER",
+        "MIMIC_API_TOKEN",
+    ]:
         monkeypatch.delenv(k, raising=False)
     monkeypatch.chdir(tmp_path)
 
@@ -46,7 +53,7 @@ def test_explicit_env_overrides_docker_default(monkeypatch):
 def test_api_token_round_trip(monkeypatch):
     monkeypatch.setenv("MIMIC_API_TOKEN", "shhh")
     s = Settings()
-    assert s.api_token == "shhh"
+    assert s.api_token == "shhh"  # noqa: S105
     assert s.auth_required is True
 
 

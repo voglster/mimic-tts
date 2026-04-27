@@ -1,6 +1,5 @@
-import pytest
 import httpx
-
+import pytest
 from mimic._base import RequestSpec, build_request_spec, raise_for_response
 from mimic.errors import MimicAPIError, MimicAuthError, MimicNotFoundError
 
@@ -22,7 +21,7 @@ def test_build_request_with_token_adds_bearer_header():
         base_url="http://localhost:8000",
         method="POST",
         path="/tts",
-        token="shhh",
+        token="shhh",  # noqa: S106
         data={"text": "hello"},
     )
     assert spec.headers["Authorization"] == "Bearer shhh"
@@ -40,7 +39,7 @@ def test_base_url_strips_trailing_slash():
 
 
 def test_path_must_start_with_slash():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="path must start with"):
         build_request_spec(
             base_url="http://localhost:8000",
             method="GET",

@@ -2,7 +2,6 @@ import asyncio
 import time
 
 import pytest
-
 from mimic_server.models import ModelManager
 
 
@@ -66,7 +65,7 @@ async def test_idle_watcher_unloads_after_timeout():
             await task
 
 
-def test_get_resets_idle_timer(monkeypatch):
+def test_get_resets_idle_timer(monkeypatch):  # noqa: ARG001
     mm = ModelManager(loader=lambda mid: FakeModel(mid), unload_after=60)
     mm.register("clone", "Qwen/c")
     mm.get("clone")

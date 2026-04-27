@@ -1,20 +1,26 @@
 """Optional bearer-token auth dependency."""
+
 from __future__ import annotations
 
 import secrets
-from typing import Callable
+from typing import TYPE_CHECKING
 
 from fastapi import Header, HTTPException, status
 
-from mimic_server.config import Settings
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from mimic_server.config import Settings
 
 
 def require_token(settings: Settings) -> Callable[..., None]:
     """Return a dependency. If no token is configured, dependency is a no-op."""
 
     if not settings.auth_required:
+
         def _noop() -> None:
             return None
+
         return _noop
 
     expected = settings.api_token or ""

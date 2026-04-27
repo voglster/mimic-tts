@@ -1,11 +1,14 @@
 """Microphone recording flow for the `mimic record` CLI command."""
+
 from __future__ import annotations
 
 import random
 import threading
 from dataclasses import dataclass
-from pathlib import Path
-from typing import IO
+from typing import IO, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 import numpy as np
 import sounddevice as sd
@@ -47,11 +50,13 @@ def record_until_enter(
     stop = stop_event or threading.Event()
     chunks: list[np.ndarray] = []
 
-    def callback(indata: np.ndarray, frames: int, time_info, status) -> None:
+    def callback(indata: np.ndarray, _frames: int, _time_info: object, _status: object) -> None:
         chunks.append(indata.copy())
 
     with sd.InputStream(
-        samplerate=sample_rate, channels=channels, callback=callback,
+        samplerate=sample_rate,
+        channels=channels,
+        callback=callback,
     ):
         stop.wait(timeout=max_seconds)
 

@@ -1,6 +1,5 @@
 import httpx
 import pytest
-
 from mimic import AsyncClient
 from mimic.errors import MimicAuthError
 
@@ -35,7 +34,8 @@ async def test_health(transport):
 async def test_list_voices(transport):
     mt, routes = transport
     routes[("GET", "/voices")] = httpx.Response(
-        200, json={"voices": [{"name": "Ryan", "language": "English"}]},
+        200,
+        json={"voices": [{"name": "Ryan", "language": "English"}]},
     )
     async with AsyncClient(server_url="http://x", transport=mt) as c:
         voices = await c.list_voices()
@@ -46,7 +46,9 @@ async def test_list_voices(transport):
 async def test_tts(transport):
     mt, routes = transport
     routes[("POST", "/tts")] = httpx.Response(
-        200, content=_wav_bytes(), headers={"content-type": "audio/wav"},
+        200,
+        content=_wav_bytes(),
+        headers={"content-type": "audio/wav"},
     )
     async with AsyncClient(server_url="http://x", transport=mt) as c:
         audio = await c.tts("hi")
@@ -57,7 +59,8 @@ async def test_tts(transport):
 async def test_clone_register(transport, tmp_path):
     mt, routes = transport
     routes[("POST", "/clone/register")] = httpx.Response(
-        200, json={"status": "ok", "name": "alice"},
+        200,
+        json={"status": "ok", "name": "alice"},
     )
     async with AsyncClient(server_url="http://x", transport=mt) as c:
         ref = tmp_path / "ref.wav"
@@ -70,7 +73,9 @@ async def test_clone_register(transport, tmp_path):
 async def test_clone_tts(transport):
     mt, routes = transport
     routes[("POST", "/clone/tts")] = httpx.Response(
-        200, content=_wav_bytes(), headers={"content-type": "audio/wav"},
+        200,
+        content=_wav_bytes(),
+        headers={"content-type": "audio/wav"},
     )
     async with AsyncClient(server_url="http://x", transport=mt) as c:
         audio = await c.clone_tts("alice", "hi")
@@ -95,6 +100,6 @@ async def test_token_in_header():
         return httpx.Response(200, json={"voices": []})
 
     mt = httpx.MockTransport(handler)
-    async with AsyncClient(server_url="http://x", token="shhh", transport=mt) as c:
+    async with AsyncClient(server_url="http://x", token="shhh", transport=mt) as c:  # noqa: S106
         await c.list_voices()
     assert seen["auth"] == "Bearer shhh"

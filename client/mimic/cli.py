@@ -1,4 +1,5 @@
 """`mimic` CLI — typer-based command-line interface."""
+
 from __future__ import annotations
 
 import io
@@ -118,13 +119,20 @@ def _interactive_record_and_register(name: str) -> None:
 
     typer.echo("Recording… press Enter to stop.")
     stop = threading.Event()
-    waiter = threading.Thread(target=lambda: (sys.stdin.readline(), stop.set()))
+
+    def _wait_for_enter() -> None:
+        sys.stdin.readline()
+        stop.set()
+
+    waiter = threading.Thread(target=_wait_for_enter)
     waiter.daemon = True
     waiter.start()
 
     result = record_until_enter(
-        sample_rate=DEFAULT_SAMPLE_RATE, channels=1,
-        max_seconds=30.0, stop_event=stop,
+        sample_rate=DEFAULT_SAMPLE_RATE,
+        channels=1,
+        max_seconds=30.0,
+        stop_event=stop,
     )
 
     typer.echo("Playing back…")
@@ -132,7 +140,8 @@ def _interactive_record_and_register(name: str) -> None:
 
     keep = typer.prompt("Keep this take? [y/N/r=retry]", default="N").strip().lower()
     if keep == "r":
-        return _interactive_record_and_register(name)
+        _interactive_record_and_register(name)
+        return
     if not keep.startswith("y"):
         typer.echo("discarded.")
         raise typer.Exit(0)

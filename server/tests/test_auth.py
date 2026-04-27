@@ -1,6 +1,7 @@
+from typing import Annotated
+
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
-
 from mimic_server.auth import require_token
 from mimic_server.config import Settings
 
@@ -9,7 +10,7 @@ def _app(settings: Settings) -> FastAPI:
     app = FastAPI()
 
     @app.get("/protected")
-    def protected(_: None = Depends(require_token(settings))) -> dict[str, str]:
+    def protected(_: Annotated[None, Depends(require_token(settings))]) -> dict[str, str]:
         return {"ok": "yes"}
 
     return app
@@ -22,7 +23,7 @@ def test_no_token_configured_allows_anyone():
 
 
 def test_token_required_rejects_missing_header():
-    settings = Settings(api_token="shhh")
+    settings = Settings(api_token="shhh")  # noqa: S106
     client = TestClient(_app(settings))
     r = client.get("/protected")
     assert r.status_code == 401
@@ -30,14 +31,14 @@ def test_token_required_rejects_missing_header():
 
 
 def test_token_required_rejects_wrong_token():
-    settings = Settings(api_token="shhh")
+    settings = Settings(api_token="shhh")  # noqa: S106
     client = TestClient(_app(settings))
     r = client.get("/protected", headers={"Authorization": "Bearer nope"})
     assert r.status_code == 401
 
 
 def test_token_required_accepts_correct_token():
-    settings = Settings(api_token="shhh")
+    settings = Settings(api_token="shhh")  # noqa: S106
     client = TestClient(_app(settings))
     r = client.get("/protected", headers={"Authorization": "Bearer shhh"})
     assert r.status_code == 200

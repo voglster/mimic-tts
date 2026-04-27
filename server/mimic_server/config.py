@@ -1,4 +1,5 @@
 """Environment-driven settings for the mimic-tts server."""
+
 from __future__ import annotations
 
 import os
@@ -23,7 +24,7 @@ def _default_model_cache() -> Path | None:
 
 
 def _default_host() -> str:
-    return "0.0.0.0" if os.environ.get("MIMIC_DATA_DIR") else "127.0.0.1"  # noqa: S104
+    return "0.0.0.0" if os.environ.get("MIMIC_DATA_DIR") else "127.0.0.1"
 
 
 class Settings(BaseSettings):

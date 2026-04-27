@@ -1,7 +1,6 @@
 import textwrap
 
 import pytest
-
 from mimic.config import ClientConfig, load_config
 
 
@@ -19,20 +18,22 @@ def test_env_overrides_defaults(monkeypatch, tmp_path):
     monkeypatch.setenv("MIMIC_API_TOKEN", "shhh")
     cfg = load_config(config_dir=tmp_path)
     assert cfg.server_url == "http://nas.local:8000"
-    assert cfg.token == "shhh"
+    assert cfg.token == "shhh"  # noqa: S105
 
 
 def test_toml_used_when_no_env(monkeypatch, tmp_path):
     monkeypatch.delenv("MIMIC_SERVER_URL", raising=False)
     monkeypatch.delenv("MIMIC_API_TOKEN", raising=False)
-    (tmp_path / "config.toml").write_text(textwrap.dedent("""
+    (tmp_path / "config.toml").write_text(
+        textwrap.dedent("""
         server_url = "http://nas.local:8000"
         token = "from-toml"
         default_voice = "Aiden"
-    """))
+    """)
+    )
     cfg = load_config(config_dir=tmp_path)
     assert cfg.server_url == "http://nas.local:8000"
-    assert cfg.token == "from-toml"
+    assert cfg.token == "from-toml"  # noqa: S105
     assert cfg.default_voice == "Aiden"
 
 
@@ -47,10 +48,12 @@ def test_kwargs_override_everything(monkeypatch, tmp_path):
     monkeypatch.setenv("MIMIC_SERVER_URL", "http://from-env:8000")
     (tmp_path / "config.toml").write_text('server_url = "http://from-toml:8000"\n')
     cfg = load_config(
-        server_url="http://from-arg:8000", token="from-arg", config_dir=tmp_path,
+        server_url="http://from-arg:8000",
+        token="from-arg",  # noqa: S106
+        config_dir=tmp_path,
     )
     assert cfg.server_url == "http://from-arg:8000"
-    assert cfg.token == "from-arg"
+    assert cfg.token == "from-arg"  # noqa: S105
 
 
 def test_malformed_toml_raises(tmp_path):
@@ -60,10 +63,12 @@ def test_malformed_toml_raises(tmp_path):
 
 
 def test_unknown_toml_keys_ignored(tmp_path):
-    (tmp_path / "config.toml").write_text(textwrap.dedent("""
+    (tmp_path / "config.toml").write_text(
+        textwrap.dedent("""
         server_url = "http://x:8000"
         unknown_key = "ignored"
-    """))
+    """)
+    )
     cfg = load_config(config_dir=tmp_path)
     assert cfg.server_url == "http://x:8000"
 

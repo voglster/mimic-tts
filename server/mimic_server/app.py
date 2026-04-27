@@ -1,15 +1,19 @@
 """mimic-tts server — FastAPI app factory."""
+
 from __future__ import annotations
 
 import io
 import logging
 import time
 from contextlib import asynccontextmanager
-from typing import Any, Callable
+from typing import TYPE_CHECKING, Annotated, Any
 
 import soundfile as sf
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 from mimic_server.auth import require_token
 from mimic_server.config import Settings
@@ -40,7 +44,9 @@ def _default_qwen_loader(model_id: str) -> Any:
     logger.info("loading %s …", model_id)
     t0 = time.monotonic()
     model = Qwen3TTSModel.from_pretrained(
-        model_id, device_map="cuda:0", dtype=torch.bfloat16,
+        model_id,
+        device_map="cuda:0",
+        dtype=torch.bfloat16,
     )
     logger.info("loaded %s in %.1fs", model_id, time.monotonic() - t0)
     return model
@@ -49,12 +55,15 @@ def _default_qwen_loader(model_id: str) -> Any:
 def _on_torch_unload() -> None:
     try:
         import torch
+
         torch.cuda.empty_cache()
     except ImportError:
         pass
 
 
-def _wav_response(samples: Any, sample_rate: int, filename: str = "output.wav") -> StreamingResponse:
+def _wav_response(
+    samples: Any, sample_rate: int, filename: str = "output.wav"
+) -> StreamingResponse:
     buf = io.BytesIO()
     sf.write(buf, samples, sample_rate, format="WAV")
     buf.seek(0)
@@ -77,7 +86,8 @@ def _load_voice_prompt_from_disk(
     if not (ref_path.exists() and ref_text_path.exists()):
         raise HTTPException(400, f"no voice '{name}' registered")
     voice_prompts[name] = model.create_voice_clone_prompt(
-        ref_audio=str(ref_path), ref_text=ref_text_path.read_text(),
+        ref_audio=str(ref_path),
+        ref_text=ref_text_path.read_text(),
     )
 
 
@@ -100,6 +110,7 @@ def _configure_environment(settings: Settings) -> None:
     logging.basicConfig(level=settings.log_level)
     if settings.model_cache is not None:
         import os
+
         os.environ["HF_HOME"] = str(settings.model_cache)
     settings.reference_dir.mkdir(parents=True, exist_ok=True)
 
@@ -121,6 +132,7 @@ def build_app(
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         import asyncio
+
         task = asyncio.create_task(mm.run_unload_watcher())
         try:
             yield
@@ -149,23 +161,25 @@ def build_app(
 
     @app.post("/tts", dependencies=[auth])
     async def tts(
-        text: str = Form(...),
-        language: str = Form("English"),
-        speaker: str = Form("Ryan"),
-        instruct: str = Form(""),
+        text: Annotated[str, Form()],
+        language: Annotated[str, Form()] = "English",
+        speaker: Annotated[str, Form()] = "Ryan",
+        instruct: Annotated[str, Form()] = "",
     ):
         model = mm.get("custom")
         wavs, sr = model.generate_custom_voice(
-            text=text, language=language, speaker=speaker,
+            text=text,
+            language=language,
+            speaker=speaker,
             instruct=instruct or None,
         )
         return _wav_response(wavs[0], sr)
 
     @app.post("/clone/register", dependencies=[auth])
     async def clone_register(
-        ref_audio: UploadFile = File(...),
-        ref_text: str = Form(...),
-        name: str = Form("default"),
+        ref_audio: Annotated[UploadFile, File()],
+        ref_text: Annotated[str, Form()],
+        name: Annotated[str, Form()] = "default",
     ) -> dict[str, str]:
         model = mm.get("clone")
         audio_bytes = await ref_audio.read()
@@ -174,36 +188,41 @@ def build_app(
         (ref_dir / "audio.wav").write_bytes(audio_bytes)
         (ref_dir / "text.txt").write_text(ref_text)
         voice_prompts[name] = model.create_voice_clone_prompt(
-            ref_audio=str(ref_dir / "audio.wav"), ref_text=ref_text,
+            ref_audio=str(ref_dir / "audio.wav"),
+            ref_text=ref_text,
         )
         return {"status": "ok", "name": name}
 
     @app.post("/clone/tts", dependencies=[auth])
     async def clone_tts(
-        text: str = Form(...),
-        language: str = Form("English"),
-        name: str = Form("default"),
+        text: Annotated[str, Form()],
+        language: Annotated[str, Form()] = "English",
+        name: Annotated[str, Form()] = "default",
     ):
         model = mm.get("clone")
         if name not in voice_prompts:
             _load_voice_prompt_from_disk(model, voice_prompts, name, settings.reference_dir)
         wavs, sr = model.generate_voice_clone(
-            text=text, language=language, voice_clone_prompt=voice_prompts[name],
+            text=text,
+            language=language,
+            voice_clone_prompt=voice_prompts[name],
         )
         return _wav_response(wavs[0], sr)
 
     @app.post("/clone/oneshot", dependencies=[auth])
     async def clone_oneshot(
-        text: str = Form(...),
-        language: str = Form("English"),
-        ref_audio: UploadFile = File(...),
-        ref_text: str = Form(...),
+        text: Annotated[str, Form()],
+        ref_audio: Annotated[UploadFile, File()],
+        ref_text: Annotated[str, Form()],
+        language: Annotated[str, Form()] = "English",
     ):
         model = mm.get("clone")
         audio_bytes = await ref_audio.read()
         wavs, sr = model.generate_voice_clone(
-            text=text, language=language,
-            ref_audio=(io.BytesIO(audio_bytes), None), ref_text=ref_text,
+            text=text,
+            language=language,
+            ref_audio=(io.BytesIO(audio_bytes), None),
+            ref_text=ref_text,
         )
         return _wav_response(wavs[0], sr)
 

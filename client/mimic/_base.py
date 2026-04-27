@@ -1,10 +1,12 @@
 """Shared request-building and error-translation logic."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import httpx
+if TYPE_CHECKING:
+    import httpx
 
 from mimic.errors import (
     MimicAPIError,
@@ -46,7 +48,7 @@ def _extract_detail(response: httpx.Response) -> str:
         body = response.json()
         if isinstance(body, dict) and "detail" in body:
             return str(body["detail"])
-    except Exception:
+    except Exception:  # noqa: S110
         pass
     return response.text or response.reason_phrase or ""
 

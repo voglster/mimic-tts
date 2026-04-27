@@ -1,12 +1,15 @@
 """Asynchronous client for the mimic-tts server."""
+
 from __future__ import annotations
 
 import os
-from io import BufferedReader
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import httpx
+
+if TYPE_CHECKING:
+    from io import BufferedReader
 
 from mimic._base import build_request_spec, raise_for_response
 from mimic.client import _as_upload
@@ -22,12 +25,11 @@ class AsyncClient:
         timeout: float = 60.0,
         transport: httpx.AsyncBaseTransport | httpx.BaseTransport | None = None,
     ) -> None:
-        self._base_url = (server_url or os.environ.get("MIMIC_SERVER_URL")
-                          or "http://localhost:8000")
+        self._base_url = server_url or os.environ.get("MIMIC_SERVER_URL") or "http://localhost:8000"
         self._token = token if token is not None else os.environ.get("MIMIC_API_TOKEN")
-        self._http = httpx.AsyncClient(timeout=timeout, transport=transport)
+        self._http = httpx.AsyncClient(timeout=timeout, transport=transport)  # type: ignore[arg-type]
 
-    async def __aenter__(self) -> "AsyncClient":
+    async def __aenter__(self) -> AsyncClient:
         return self
 
     async def __aexit__(self, *exc: object) -> None:
@@ -38,24 +40,36 @@ class AsyncClient:
 
     async def _request_json(self, method: str, path: str, **kwargs: Any) -> Any:
         spec = build_request_spec(
-            base_url=self._base_url, method=method, path=path,
-            token=self._token, **kwargs,
+            base_url=self._base_url,
+            method=method,
+            path=path,
+            token=self._token,
+            **kwargs,
         )
         r = await self._http.request(
-            spec.method, spec.url, headers=spec.headers,
-            data=spec.data, files=spec.files,
+            spec.method,
+            spec.url,
+            headers=spec.headers,
+            data=spec.data,
+            files=spec.files,
         )
         raise_for_response(r)
         return r.json()
 
     async def _request_audio(self, method: str, path: str, **kwargs: Any) -> bytes:
         spec = build_request_spec(
-            base_url=self._base_url, method=method, path=path,
-            token=self._token, **kwargs,
+            base_url=self._base_url,
+            method=method,
+            path=path,
+            token=self._token,
+            **kwargs,
         )
         r = await self._http.request(
-            spec.method, spec.url, headers=spec.headers,
-            data=spec.data, files=spec.files,
+            spec.method,
+            spec.url,
+            headers=spec.headers,
+            data=spec.data,
+            files=spec.files,
         )
         raise_for_response(r)
         return r.content
@@ -70,13 +84,17 @@ class AsyncClient:
         return (await self._request_json("GET", "/clone/voices"))["voices"]
 
     async def tts(
-        self, text: str, *, language: str = "English",
-        speaker: str = "Ryan", instruct: str = "",
+        self,
+        text: str,
+        *,
+        language: str = "English",
+        speaker: str = "Ryan",
+        instruct: str = "",
     ) -> bytes:
         return await self._request_audio(
-            "POST", "/tts",
-            data={"text": text, "language": language,
-                  "speaker": speaker, "instruct": instruct},
+            "POST",
+            "/tts",
+            data={"text": text, "language": language, "speaker": speaker, "instruct": instruct},
         )
 
     async def tts_to_file(self, text: str, out: Path | str, **kwargs: Any) -> Path:
@@ -86,29 +104,44 @@ class AsyncClient:
         return out_path
 
     async def clone_register(
-        self, name: str, audio: Path | str | bytes | BufferedReader, transcript: str,
+        self,
+        name: str,
+        audio: Path | str | bytes | BufferedReader,
+        transcript: str,
     ) -> dict[str, str]:
         files = {"ref_audio": _as_upload(audio)}
         return await self._request_json(
-            "POST", "/clone/register",
-            data={"name": name, "ref_text": transcript}, files=files,
+            "POST",
+            "/clone/register",
+            data={"name": name, "ref_text": transcript},
+            files=files,
         )
 
     async def clone_tts(
-        self, name: str, text: str, *, language: str = "English",
+        self,
+        name: str,
+        text: str,
+        *,
+        language: str = "English",
     ) -> bytes:
         return await self._request_audio(
-            "POST", "/clone/tts",
+            "POST",
+            "/clone/tts",
             data={"text": text, "language": language, "name": name},
         )
 
     async def clone_oneshot(
-        self, text: str, audio: Path | str | bytes | BufferedReader,
-        transcript: str, *, language: str = "English",
+        self,
+        text: str,
+        audio: Path | str | bytes | BufferedReader,
+        transcript: str,
+        *,
+        language: str = "English",
     ) -> bytes:
         files = {"ref_audio": _as_upload(audio)}
         return await self._request_audio(
-            "POST", "/clone/oneshot",
+            "POST",
+            "/clone/oneshot",
             data={"text": text, "language": language, "ref_text": transcript},
             files=files,
         )

@@ -2,8 +2,6 @@ import io
 from unittest.mock import MagicMock
 
 import numpy as np
-import pytest
-
 from mimic.recorder import (
     PROMPT_SCRIPTS,
     RecordingResult,
@@ -21,8 +19,9 @@ def test_pick_script_returns_one_of_the_known_scripts():
 
 def test_pick_script_is_deterministic_with_seeded_rng():
     import random
-    a = pick_script(rng=random.Random(42))
-    b = pick_script(rng=random.Random(42))
+
+    a = pick_script(rng=random.Random(42))  # noqa: S311
+    b = pick_script(rng=random.Random(42))  # noqa: S311
     assert a == b
 
 
@@ -33,7 +32,7 @@ def test_record_until_enter_collects_audio_until_signal_set(monkeypatch):
     ]
 
     class FakeStream:
-        def __init__(self, *args, **kwargs):
+        def __init__(self, *_args, **kwargs):
             self.callback = kwargs["callback"]
 
         def __enter__(self):
@@ -61,7 +60,9 @@ def test_record_until_enter_collects_audio_until_signal_set(monkeypatch):
     assert result.channels == 1
     assert result.audio.shape == (4, 1)
     np.testing.assert_allclose(
-        result.audio.flatten(), [0.1, 0.2, 0.3, 0.4], rtol=1e-5,
+        result.audio.flatten(),
+        [0.1, 0.2, 0.3, 0.4],
+        rtol=1e-5,
     )
 
 
@@ -70,6 +71,7 @@ def test_save_wav_writes_a_readable_wav(tmp_path):
     out = tmp_path / "out.wav"
     save_wav(out, audio, sample_rate=24000)
     import soundfile as sf
+
     data, sr = sf.read(out)
     assert sr == 24000
     assert len(data) == 24000
@@ -81,5 +83,6 @@ def test_save_wav_to_buffer():
     save_wav(buf, audio, sample_rate=24000)
     buf.seek(0)
     import soundfile as sf
-    data, sr = sf.read(buf)
+
+    _, sr = sf.read(buf)
     assert sr == 24000

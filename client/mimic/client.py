@@ -1,10 +1,13 @@
 """Synchronous client for the mimic-tts server."""
+
 from __future__ import annotations
 
 import os
-from io import BufferedReader
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from io import BufferedReader
 
 import httpx
 
@@ -21,12 +24,11 @@ class Client:
         timeout: float = 60.0,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        self._base_url = (server_url or os.environ.get("MIMIC_SERVER_URL")
-                          or "http://localhost:8000")
+        self._base_url = server_url or os.environ.get("MIMIC_SERVER_URL") or "http://localhost:8000"
         self._token = token if token is not None else os.environ.get("MIMIC_API_TOKEN")
         self._http = httpx.Client(timeout=timeout, transport=transport)
 
-    def __enter__(self) -> "Client":
+    def __enter__(self) -> Client:
         return self
 
     def __exit__(self, *exc: object) -> None:
@@ -37,21 +39,29 @@ class Client:
 
     def _request_json(self, method: str, path: str, **kwargs: Any) -> Any:
         spec = build_request_spec(
-            base_url=self._base_url, method=method, path=path,
-            token=self._token, **kwargs,
+            base_url=self._base_url,
+            method=method,
+            path=path,
+            token=self._token,
+            **kwargs,
         )
-        r = self._http.request(spec.method, spec.url, headers=spec.headers,
-                               data=spec.data, files=spec.files)
+        r = self._http.request(
+            spec.method, spec.url, headers=spec.headers, data=spec.data, files=spec.files
+        )
         raise_for_response(r)
         return r.json()
 
     def _request_audio(self, method: str, path: str, **kwargs: Any) -> bytes:
         spec = build_request_spec(
-            base_url=self._base_url, method=method, path=path,
-            token=self._token, **kwargs,
+            base_url=self._base_url,
+            method=method,
+            path=path,
+            token=self._token,
+            **kwargs,
         )
-        r = self._http.request(spec.method, spec.url, headers=spec.headers,
-                               data=spec.data, files=spec.files)
+        r = self._http.request(
+            spec.method, spec.url, headers=spec.headers, data=spec.data, files=spec.files
+        )
         raise_for_response(r)
         return r.content
 
@@ -65,13 +75,17 @@ class Client:
         return self._request_json("GET", "/clone/voices")["voices"]
 
     def tts(
-        self, text: str, *, language: str = "English",
-        speaker: str = "Ryan", instruct: str = "",
+        self,
+        text: str,
+        *,
+        language: str = "English",
+        speaker: str = "Ryan",
+        instruct: str = "",
     ) -> bytes:
         return self._request_audio(
-            "POST", "/tts",
-            data={"text": text, "language": language,
-                  "speaker": speaker, "instruct": instruct},
+            "POST",
+            "/tts",
+            data={"text": text, "language": language, "speaker": speaker, "instruct": instruct},
         )
 
     def tts_to_file(self, text: str, out: Path | str, **kwargs: Any) -> Path:
@@ -81,29 +95,44 @@ class Client:
         return out_path
 
     def clone_register(
-        self, name: str, audio: Path | str | bytes | BufferedReader, transcript: str,
+        self,
+        name: str,
+        audio: Path | str | bytes | BufferedReader,
+        transcript: str,
     ) -> dict[str, str]:
         files = {"ref_audio": _as_upload(audio)}
         return self._request_json(
-            "POST", "/clone/register",
-            data={"name": name, "ref_text": transcript}, files=files,
+            "POST",
+            "/clone/register",
+            data={"name": name, "ref_text": transcript},
+            files=files,
         )
 
     def clone_tts(
-        self, name: str, text: str, *, language: str = "English",
+        self,
+        name: str,
+        text: str,
+        *,
+        language: str = "English",
     ) -> bytes:
         return self._request_audio(
-            "POST", "/clone/tts",
+            "POST",
+            "/clone/tts",
             data={"text": text, "language": language, "name": name},
         )
 
     def clone_oneshot(
-        self, text: str, audio: Path | str | bytes | BufferedReader,
-        transcript: str, *, language: str = "English",
+        self,
+        text: str,
+        audio: Path | str | bytes | BufferedReader,
+        transcript: str,
+        *,
+        language: str = "English",
     ) -> bytes:
         files = {"ref_audio": _as_upload(audio)}
         return self._request_audio(
-            "POST", "/clone/oneshot",
+            "POST",
+            "/clone/oneshot",
             data={"text": text, "language": language, "ref_text": transcript},
             files=files,
         )

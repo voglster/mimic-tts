@@ -1,12 +1,9 @@
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-import numpy as np
 import pytest
-from typer.testing import CliRunner
-
 from mimic.cli import app
-from mimic.recorder import RecordingResult
+from typer.testing import CliRunner
 
 
 @pytest.fixture
@@ -62,7 +59,9 @@ def test_health(runner):
 def test_say_writes_output_file(runner, tmp_path):
     fake = MagicMock()
     out = tmp_path / "out.wav"
-    fake.tts_to_file.side_effect = lambda text, path, **kw: Path(path).write_bytes(b"RIFF\x00\x00\x00\x00WAVEfmt " + b"\x00" * 100)
+    fake.tts_to_file.side_effect = lambda _text, path, **_kw: Path(path).write_bytes(
+        b"RIFF\x00\x00\x00\x00WAVEfmt " + b"\x00" * 100
+    )
     fake.__enter__ = MagicMock(return_value=fake)
     fake.__exit__ = MagicMock(return_value=None)
     with patch("mimic.cli.Client", return_value=fake):
@@ -109,11 +108,17 @@ def test_record_with_audio_and_text_skips_recorder(runner, tmp_path):
     fake.__exit__ = MagicMock(return_value=None)
 
     with patch("mimic.cli.Client", return_value=fake):
-        r = runner.invoke(app, [
-            "record", "alice",
-            "--audio", str(audio),
-            "--text", "transcript here",
-        ])
+        r = runner.invoke(
+            app,
+            [
+                "record",
+                "alice",
+                "--audio",
+                str(audio),
+                "--text",
+                "transcript here",
+            ],
+        )
     assert r.exit_code == 0, r.stdout
     fake.clone_register.assert_called_once()
 

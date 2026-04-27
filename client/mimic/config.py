@@ -1,4 +1,5 @@
 """Client configuration: kwarg → env → TOML → defaults."""
+
 from __future__ import annotations
 
 import os
@@ -61,11 +62,7 @@ def load_config(
         if token is not None
         else os.environ.get("MIMIC_API_TOKEN") or file_data.get("token") or None
     )
-    resolved_voice = (
-        default_voice
-        or file_data.get("default_voice")
-        or DEFAULT_VOICE
-    )
+    resolved_voice = default_voice or file_data.get("default_voice") or DEFAULT_VOICE
 
     return ClientConfig(
         server_url=str(resolved_url),
