@@ -639,7 +639,7 @@ wheels = [
 
 [[package]]
 name = "mimic-server"
-version = "0.0.0"
+version = "0.0.4"
 source = { editable = "server" }
 dependencies = [
     { name = "fastapi", extra = ["standard"] },
@@ -679,7 +679,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "mimic-tts"
-version = "0.0.0"
+version = "0.0.4"
 source = { editable = "client" }
 dependencies = [
     { name = "httpx" },

@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     unload_after: int = 15
     api_token: str | None = None
     log_level: str = "INFO"
+    backend: str = "qwen"
 
     @computed_field  # type: ignore[prop-decorator]
     @property

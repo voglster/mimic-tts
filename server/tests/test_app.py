@@ -1,72 +1,108 @@
 from unittest.mock import MagicMock
 
+import numpy as np
 import pytest
+from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from mimic_server.app import build_app
 from mimic_server.config import Settings
 
 
 @pytest.fixture
-def fake_model():
-    m = MagicMock()
-    m.generate_custom_voice.return_value = ([b"\x00\x01"], 24000)
-    m.generate_voice_clone.return_value = ([b"\x00\x01"], 24000)
-    m.create_voice_clone_prompt.return_value = object()
-    return m
+def fake_backend():
+    b = MagicMock()
+    audio = np.zeros(1024, dtype=np.float32)
+    b.builtin_voices.return_value = [{"name": "Ryan", "language": "English"}]
+    b.synth_builtin.return_value = (audio, 24000)
+    b.synth_clone.return_value = (audio, 24000)
+    b.synth_clone_oneshot.return_value = (audio, 24000)
+    b.loaded_keys.return_value = []
+
+    async def _no_lifecycle():
+        return None
+
+    b.run_lifecycle = _no_lifecycle
+    return b
 
 
-def test_health_no_auth(tmp_path, fake_model):
-    settings = Settings(reference_dir=tmp_path, api_token=None)
-    app = build_app(settings, model_loader=lambda _mid: fake_model)
-    client = TestClient(app)
+def _app(tmp_path, fake_backend, *, token=None):
+    settings = Settings(reference_dir=tmp_path, api_token=token)
+    return build_app(settings, backend_factory=lambda _s: fake_backend)
+
+
+def test_health_no_auth(tmp_path, fake_backend):
+    client = TestClient(_app(tmp_path, fake_backend))
     r = client.get("/health")
     assert r.status_code == 200
-    assert r.json()["status"] == "ok"
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["backend"] == "qwen"
 
 
-def test_voices_unauthenticated_when_no_token(tmp_path, fake_model):
-    settings = Settings(reference_dir=tmp_path, api_token=None)
-    app = build_app(settings, model_loader=lambda _mid: fake_model)
-    client = TestClient(app)
+def test_voices_unauthenticated_when_no_token(tmp_path, fake_backend):
+    client = TestClient(_app(tmp_path, fake_backend))
     assert client.get("/voices").status_code == 200
 
 
-def test_protected_route_rejects_without_token(tmp_path, fake_model):
-    settings = Settings(reference_dir=tmp_path, api_token="shhh")  # noqa: S106
-    app = build_app(settings, model_loader=lambda _mid: fake_model)
-    client = TestClient(app)
+def test_protected_route_rejects_without_token(tmp_path, fake_backend):
+    client = TestClient(_app(tmp_path, fake_backend, token="shhh"))  # noqa: S106
     assert client.get("/voices").status_code == 401
 
 
-def test_health_remains_open_even_with_token(tmp_path, fake_model):
-    settings = Settings(reference_dir=tmp_path, api_token="shhh")  # noqa: S106
-    app = build_app(settings, model_loader=lambda _mid: fake_model)
-    client = TestClient(app)
+def test_health_remains_open_even_with_token(tmp_path, fake_backend):
+    client = TestClient(_app(tmp_path, fake_backend, token="shhh"))  # noqa: S106
     assert client.get("/health").status_code == 200
 
 
-def test_tts_endpoint_returns_wav(tmp_path, fake_model):
-    import numpy as np
-
-    fake_model.generate_custom_voice.return_value = ([np.zeros(1024, dtype=np.float32)], 24000)
-
-    settings = Settings(reference_dir=tmp_path, api_token=None)
-    app = build_app(settings, model_loader=lambda _mid: fake_model)
-    client = TestClient(app)
-
+def test_tts_endpoint_returns_wav(tmp_path, fake_backend):
+    client = TestClient(_app(tmp_path, fake_backend))
     r = client.post("/tts", data={"text": "hello", "speaker": "Ryan"})
     assert r.status_code == 200
     assert r.headers["content-type"] == "audio/wav"
 
 
-def test_tts_unsupported_speaker_returns_400(tmp_path, fake_model):
-    """Qwen raises ValueError for unsupported built-in speakers; surface as 400 not 500."""
-    fake_model.generate_custom_voice.side_effect = ValueError(
-        "Unsupported speakers: ['jim']. Supported: ['ryan', ...]"
+def test_tts_unsupported_speaker_returns_400(tmp_path, fake_backend):
+    """Backends surface unsupported built-in speakers as HTTP 400."""
+    fake_backend.synth_builtin.side_effect = HTTPException(
+        status_code=400, detail="Unsupported speakers: ['jim']."
     )
-    settings = Settings(reference_dir=tmp_path, api_token=None)
-    app = build_app(settings, model_loader=lambda _mid: fake_model)
-    client = TestClient(app)
+    client = TestClient(_app(tmp_path, fake_backend))
     r = client.post("/tts", data={"text": "hi", "speaker": "jim"})
     assert r.status_code == 400
     assert "jim" in r.json()["detail"]
+
+
+def test_clone_register_writes_files_and_lists_voice(tmp_path, fake_backend):
+    client = TestClient(_app(tmp_path, fake_backend))
+    r = client.post(
+        "/clone/register",
+        data={"ref_text": "hi there", "name": "alice"},
+        files={"ref_audio": ("a.wav", b"\x00\x01\x02", "audio/wav")},
+    )
+    assert r.status_code == 200
+    assert (tmp_path / "alice" / "audio.wav").read_bytes() == b"\x00\x01\x02"
+    assert (tmp_path / "alice" / "text.txt").read_text() == "hi there"
+    r = client.get("/clone/voices")
+    assert r.json() == {"voices": ["alice"]}
+
+
+def test_clone_tts_unknown_voice_returns_400(tmp_path, fake_backend):
+    client = TestClient(_app(tmp_path, fake_backend))
+    r = client.post("/clone/tts", data={"text": "hi", "name": "nobody"})
+    assert r.status_code == 400
+
+
+def test_clone_tts_uses_backend(tmp_path, fake_backend):
+    # Pre-register on disk
+    voice_dir = tmp_path / "alice"
+    voice_dir.mkdir()
+    (voice_dir / "audio.wav").write_bytes(b"\x00")
+    (voice_dir / "text.txt").write_text("hi there")
+
+    client = TestClient(_app(tmp_path, fake_backend))
+    r = client.post("/clone/tts", data={"text": "hello", "name": "alice"})
+    assert r.status_code == 200
+    fake_backend.synth_clone.assert_called_once()
+    kwargs = fake_backend.synth_clone.call_args.kwargs
+    assert kwargs["name"] == "alice"
+    assert kwargs["ref_text"] == "hi there"
