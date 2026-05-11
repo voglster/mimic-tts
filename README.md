@@ -73,6 +73,7 @@ async with AsyncClient() as c:
 | `POST` | `/clone/register`   | Register a reference voice (file + transcript) |
 | `POST` | `/clone/tts`        | Synthesize using a registered clone         |
 | `POST` | `/clone/oneshot`    | Clone + synthesize in one call              |
+| `POST` | `/v1/audio/speech`  | OpenAI-compatible TTS (drop-in for HA `sfortis/openai_tts`) |
 | `GET`  | `/voices`           | List built-in voices                        |
 | `GET`  | `/clone/voices`     | List registered clone voices                |
 | `GET`  | `/health`           | Loaded models + registered voices (always open) |

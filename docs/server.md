@@ -17,6 +17,7 @@ distributed via PyPI — install it via Docker or from source).
 | `MIMIC_API_TOKEN` | unset | unset | Optional bearer token (off by default) |
 | `MIMIC_LOG_LEVEL` | `INFO` | `INFO` | Log level |
 | `MIMIC_BACKEND` | `chatterbox` | `chatterbox` | TTS engine (currently only `chatterbox`) |
+| `MIMIC_ALLOW_UNAUTHENTICATED_PUBLIC_BIND` | `false` | `false` | Allow public bind without `MIMIC_API_TOKEN` (set when a reverse proxy / tailnet ACL handles auth upstream) |
 
 ## Endpoints
 
@@ -48,6 +49,24 @@ Slower than register-then-call, but doesn't persist anything.
 ### `GET /voices`, `GET /clone/voices`, `GET /health`
 JSON lists. `/health` is always unauthenticated.
 
+### `POST /v1/audio/speech` — OpenAI-compatible
+JSON body matching OpenAI's TTS API:
+
+```json
+{
+  "model": "tts-1",           // ignored, single engine
+  "input": "text to speak",
+  "voice": "default",         // built-in name OR registered clone name
+  "response_format": "wav",   // wav | flac | pcm  (mp3/opus/aac require an encoder we don't ship)
+  "speed": 1.0                // ignored (Chatterbox has no native speed knob)
+}
+```
+
+Returns raw audio bytes with the appropriate Content-Type. Designed to be a
+drop-in for the [`sfortis/openai_tts`](https://github.com/sfortis/openai_tts)
+Home Assistant integration and any other tool that speaks OpenAI's TTS API
+(open-webui, LibreChat, etc.).
+
 ## GPU + memory
 
 Chatterbox loads on `cuda` (auto-falls back to CPU). Takes a few GB VRAM.
@@ -62,6 +81,12 @@ takes ~10s for the model to load; subsequent calls are fast.
 
 `MIMIC_API_TOKEN=secret` flips on bearer auth for every endpoint except
 `/health`. The check uses `secrets.compare_digest` (constant-time).
+
+**Public-bind safety check**: if `MIMIC_HOST` is non-loopback (e.g. `0.0.0.0`)
+and `MIMIC_API_TOKEN` is unset, the server refuses to start. This prevents
+the "oops I exposed it" scenario. If a reverse proxy / tailnet ACL is
+enforcing auth upstream and you really do want no app-level token, set
+`MIMIC_ALLOW_UNAUTHENTICATED_PUBLIC_BIND=1` explicitly.
 
 There's intentionally no token rotation, no per-user tokens, no JWT, and no
 TLS termination — that's your reverse proxy's job. See

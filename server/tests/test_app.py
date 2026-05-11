@@ -106,3 +106,95 @@ def test_clone_tts_uses_backend(tmp_path, fake_backend):
     kwargs = fake_backend.synth_clone.call_args.kwargs
     assert kwargs["name"] == "alice"
     assert kwargs["ref_text"] == "hi there"
+
+
+def test_openai_speech_routes_builtin_voice(tmp_path, fake_backend):
+    client = TestClient(_app(tmp_path, fake_backend))
+    r = client.post(
+        "/v1/audio/speech",
+        json={"model": "tts-1", "input": "hello", "voice": "default"},
+    )
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "audio/wav"
+    fake_backend.synth_builtin.assert_called_once()
+    fake_backend.synth_clone.assert_not_called()
+
+
+def test_openai_speech_routes_clone_voice(tmp_path, fake_backend):
+    voice_dir = tmp_path / "piper"
+    voice_dir.mkdir()
+    (voice_dir / "audio.wav").write_bytes(b"\x00")
+    (voice_dir / "text.txt").write_text("sample")
+    client = TestClient(_app(tmp_path, fake_backend))
+    r = client.post(
+        "/v1/audio/speech",
+        json={"model": "tts-1", "input": "hi", "voice": "piper"},
+    )
+    assert r.status_code == 200
+    fake_backend.synth_clone.assert_called_once()
+    fake_backend.synth_builtin.assert_not_called()
+
+
+def test_openai_speech_unknown_voice_returns_400(tmp_path, fake_backend):
+    client = TestClient(_app(tmp_path, fake_backend))
+    r = client.post(
+        "/v1/audio/speech",
+        json={"model": "tts-1", "input": "hi", "voice": "nobody"},
+    )
+    assert r.status_code == 400
+
+
+def test_openai_speech_rejects_mp3_with_helpful_message(tmp_path, fake_backend):
+    client = TestClient(_app(tmp_path, fake_backend))
+    r = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "tts-1",
+            "input": "hi",
+            "voice": "default",
+            "response_format": "mp3",
+        },
+    )
+    assert r.status_code == 400
+    assert "mp3" in r.json()["detail"].lower()
+
+
+def test_openai_speech_flac_returns_audio_flac(tmp_path, fake_backend):
+    client = TestClient(_app(tmp_path, fake_backend))
+    r = client.post(
+        "/v1/audio/speech",
+        json={
+            "model": "tts-1",
+            "input": "hi",
+            "voice": "default",
+            "response_format": "flac",
+        },
+    )
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "audio/flac"
+
+
+def test_openai_speech_requires_auth_when_token_set(tmp_path, fake_backend):
+    client = TestClient(_app(tmp_path, fake_backend, token="shhh"))  # noqa: S106
+    r = client.post(
+        "/v1/audio/speech",
+        json={"model": "tts-1", "input": "hi", "voice": "default"},
+    )
+    assert r.status_code == 401
+
+
+def test_public_bind_without_token_refuses_to_start(tmp_path, fake_backend):
+    settings = Settings(reference_dir=tmp_path, host="0.0.0.0", api_token=None)
+    with pytest.raises(RuntimeError, match="MIMIC_API_TOKEN"):
+        build_app(settings, backend_factory=lambda _s: fake_backend)
+
+
+def test_public_bind_with_explicit_override_starts(tmp_path, fake_backend):
+    settings = Settings(
+        reference_dir=tmp_path,
+        host="0.0.0.0",
+        api_token=None,
+        allow_unauthenticated_public_bind=True,
+    )
+    app = build_app(settings, backend_factory=lambda _s: fake_backend)
+    assert app is not None  # smoke — no RuntimeError

@@ -40,6 +40,7 @@ class Settings(BaseSettings):
     api_token: str | None = None
     log_level: str = "INFO"
     backend: str = "chatterbox"
+    allow_unauthenticated_public_bind: bool = False  # escape hatch; see app.py
 
     @computed_field  # type: ignore[prop-decorator]
     @property

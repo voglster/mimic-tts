@@ -9,7 +9,8 @@ from typing import TYPE_CHECKING, Annotated, Any
 
 import soundfile as sf
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
+from pydantic import BaseModel
 
 from mimic_server.auth import require_token
 from mimic_server.backends import TTSBackend, make_backend
@@ -35,13 +36,43 @@ def _wav_response(
 
 
 def _configure_environment(settings: Settings) -> None:
-    """Apply environment-level settings (logging, HF_HOME, dirs)."""
+    """Apply environment-level settings (logging, HF_HOME, dirs) and enforce
+    the public-bind-needs-auth safety check."""
     logging.basicConfig(level=settings.log_level)
     if settings.model_cache is not None:
         import os
 
         os.environ["HF_HOME"] = str(settings.model_cache)
     settings.reference_dir.mkdir(parents=True, exist_ok=True)
+    _check_public_bind_auth(settings)
+
+
+def _check_public_bind_auth(settings: Settings) -> None:
+    """Refuse to start when bound to a non-loopback host without a bearer token.
+
+    Set MIMIC_ALLOW_UNAUTHENTICATED_PUBLIC_BIND=1 to override (e.g. when a
+    reverse proxy / Tailscale ACL is providing access control upstream).
+    """
+    is_loopback = settings.host in {"127.0.0.1", "::1", "localhost"}
+    if is_loopback or settings.api_token or settings.allow_unauthenticated_public_bind:
+        if settings.api_token:
+            logger.info("bearer auth ON (MIMIC_API_TOKEN set)")
+        elif settings.allow_unauthenticated_public_bind:
+            logger.warning(
+                "auth OFF and host=%s (public). "
+                "MIMIC_ALLOW_UNAUTHENTICATED_PUBLIC_BIND=1 was set — assuming "
+                "upstream access control is enforced.",
+                settings.host,
+            )
+        else:
+            logger.info("auth OFF (loopback-only bind)")
+        return
+    raise RuntimeError(
+        f"refusing to start: host={settings.host!r} is publicly reachable but "
+        "MIMIC_API_TOKEN is not set. Set MIMIC_API_TOKEN to enable bearer auth, "
+        "bind to 127.0.0.1, or set MIMIC_ALLOW_UNAUTHENTICATED_PUBLIC_BIND=1 "
+        "if access control is enforced upstream (reverse proxy, tailnet ACL)."
+    )
 
 
 def _resolve_clone(settings: Settings, name: str) -> tuple[Any, str]:
@@ -52,6 +83,59 @@ def _resolve_clone(settings: Settings, name: str) -> tuple[Any, str]:
     if not (ref_path.exists() and text_path.exists()):
         raise HTTPException(400, f"no voice '{name}' registered")
     return ref_path, text_path.read_text()
+
+
+# Audio formats supported by the OpenAI-compatible endpoint. The values are
+# (soundfile format, Content-Type). OpenAI also defines mp3/opus/aac, but those
+# need an external encoder (ffmpeg / lame) we don't ship — request → 400.
+_OPENAI_FORMATS: dict[str, tuple[str, str]] = {
+    "wav": ("WAV", "audio/wav"),
+    "flac": ("FLAC", "audio/flac"),
+    "pcm": ("RAW", "audio/L16"),  # raw 16-bit PCM; OpenAI uses this for low-latency
+}
+
+
+class _OpenAISpeechRequest(BaseModel):
+    """Subset of OpenAI's POST /v1/audio/speech body we honor."""
+
+    model: str = "tts-1"  # ignored — we have one engine
+    input: str
+    voice: str = "default"
+    response_format: str = "wav"  # OpenAI default is mp3; we can't encode mp3 yet
+    speed: float = 1.0  # ignored — Chatterbox has no native speed knob
+
+
+def _handle_openai_speech(
+    req: _OpenAISpeechRequest, backend: TTSBackend, settings: Settings
+) -> Response:
+    """OpenAI-compatible TTS handler. Routes `voice` to either a built-in or a
+    registered clone. Used by HACS `sfortis/openai_tts` and other OpenAI-
+    compatible clients (open-webui, etc.)."""
+    fmt = req.response_format.lower()
+    if fmt not in _OPENAI_FORMATS:
+        allowed = ", ".join(_OPENAI_FORMATS)
+        detail = (
+            f"unsupported response_format {req.response_format!r}; "
+            f"supported: {allowed}. (mp3/opus/aac require an encoder we don't ship.)"
+        )
+        raise HTTPException(400, detail)
+    sf_format, content_type = _OPENAI_FORMATS[fmt]
+
+    builtin_names = {v["name"] for v in backend.builtin_voices()}
+    if req.voice in builtin_names:
+        samples, sr = backend.synth_builtin(text=req.input, speaker=req.voice)
+    else:
+        ref_path, ref_text = _resolve_clone(settings, req.voice)
+        samples, sr = backend.synth_clone(
+            name=req.voice,
+            text=req.input,
+            ref_audio_path=ref_path,
+            ref_text=ref_text,
+        )
+
+    buf = io.BytesIO()
+    sf.write(buf, samples, sr, format=sf_format)
+    return Response(content=buf.getvalue(), media_type=content_type)
 
 
 def build_app(
@@ -144,6 +228,10 @@ def build_app(
             language=language,
         )
         return _wav_response(samples, sr)
+
+    @app.post("/v1/audio/speech", dependencies=[auth])
+    async def openai_speech(req: _OpenAISpeechRequest) -> Response:
+        return _handle_openai_speech(req, backend, settings)
 
     @app.post("/clone/oneshot", dependencies=[auth])
     async def clone_oneshot(
