@@ -84,9 +84,7 @@ def build_app(
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
-        on_disk = sorted(
-            p.parent.name for p in settings.reference_dir.glob("*/audio.wav")
-        )
+        on_disk = sorted(p.parent.name for p in settings.reference_dir.glob("*/audio.wav"))
         return {
             "status": "ok",
             "backend": settings.backend,
@@ -100,16 +98,14 @@ def build_app(
 
     @app.get("/clone/voices", dependencies=[auth])
     async def list_clone_voices() -> dict[str, list[str]]:
-        on_disk = sorted(
-            p.parent.name for p in settings.reference_dir.glob("*/audio.wav")
-        )
+        on_disk = sorted(p.parent.name for p in settings.reference_dir.glob("*/audio.wav"))
         return {"voices": on_disk}
 
     @app.post("/tts", dependencies=[auth])
     async def tts(
         text: Annotated[str, Form()],
         language: Annotated[str, Form()] = "English",
-        speaker: Annotated[str, Form()] = "Ryan",
+        speaker: Annotated[str, Form()] = "default",
         instruct: Annotated[str, Form()] = "",
     ):
         samples, sr = backend.synth_builtin(

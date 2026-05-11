@@ -10,14 +10,14 @@ The client resolves config in this order, first match wins:
 1. Constructor kwargs / CLI flags
 2. Env vars: `MIMIC_SERVER_URL`, `MIMIC_API_TOKEN`
 3. `~/.config/mimic/config.toml` (cross-platform via platformdirs)
-4. Defaults (`http://localhost:8000`, no token, default voice `Ryan`)
+4. Defaults (`http://localhost:8000`, no token, default voice `default`)
 
 Example `config.toml`:
 
 ```toml
 server_url = "http://nas.local:8000"
 token = "optional"
-default_voice = "Aiden"
+default_voice = "default"
 ```
 
 Override the config dir for tests with `MIMIC_CONFIG_DIR`.
@@ -53,8 +53,8 @@ The interactive `mimic record <name>` flow:
 from mimic import Client
 
 with Client(server_url="http://localhost:8000", token=None) as c:
-    audio = c.tts("hello", speaker="Ryan")          # bytes
-    c.tts_to_file("hello", "out.wav", speaker="Ryan")
+    audio = c.tts("hello", speaker="default")          # bytes
+    c.tts_to_file("hello", "out.wav", speaker="default")
     c.clone_register("alice", "ref.wav", "transcript")
     cloned = c.clone_tts("alice", "now alice talks")
     one_shot = c.clone_oneshot("text", "ref.wav", "ref text")

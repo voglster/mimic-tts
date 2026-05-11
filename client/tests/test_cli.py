@@ -95,12 +95,12 @@ def test_say_default_voice_from_config(runner, tmp_path):
     fake.__enter__ = MagicMock(return_value=fake)
     fake.__exit__ = MagicMock(return_value=None)
     out = tmp_path / "out.wav"
-    (tmp_path / "config.toml").write_text('default_voice = "Aiden"\n')
+    (tmp_path / "config.toml").write_text('default_voice = "default"\n')
     with patch("mimic.cli.Client", return_value=fake):
         r = runner.invoke(app, ["say", "hello", "--out", str(out)])
     assert r.exit_code == 0, r.stdout
     fake.tts.assert_called_once()
-    assert fake.tts.call_args.kwargs["speaker"] == "Aiden"
+    assert fake.tts.call_args.kwargs["speaker"] == "default"
 
 
 def test_say_unknown_voice_routes_to_clone(runner, tmp_path):

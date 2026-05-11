@@ -13,9 +13,10 @@ distributed via PyPI — install it via Docker or from source).
 | `MIMIC_PORT` | `8000` | `8000` | Bind port |
 | `MIMIC_REFERENCE_DIR` | `./reference` | `/data/reference` | Persisted clone reference audio + transcripts |
 | `MIMIC_MODEL_CACHE` | (HF default) | `/data/models` | Sets `HF_HOME`; weights cache here |
-| `MIMIC_UNLOAD_AFTER` | `15` | `15` | Seconds idle before models unload |
+| `MIMIC_UNLOAD_AFTER` | `0` | `0` | Seconds idle before models unload (`0` = keep loaded forever) |
 | `MIMIC_API_TOKEN` | unset | unset | Optional bearer token (off by default) |
 | `MIMIC_LOG_LEVEL` | `INFO` | `INFO` | Log level |
+| `MIMIC_BACKEND` | `chatterbox` | `chatterbox` | TTS engine (currently only `chatterbox`) |
 
 ## Endpoints
 
@@ -24,7 +25,10 @@ responses are `audio/wav`.
 
 ### `POST /tts` — built-in voices
 Form fields: `text` (required), `language` (default `English`), `speaker`
-(default `Ryan`), `instruct` (optional style cue).
+(default `default`), `instruct` (ignored by Chatterbox).
+
+Chatterbox ships one built-in voice named `default`. For any other voice,
+register a clone.
 
 ### `POST /clone/register` — register a clone
 Form fields: `name` (default `default`), `ref_text` (the transcript),
@@ -46,12 +50,13 @@ JSON lists. `/health` is always unauthenticated.
 
 ## GPU + memory
 
-Qwen3-TTS loads in `bfloat16` on `cuda:0`. Each model takes ~6GB VRAM. The
-server unloads any unused model after `MIMIC_UNLOAD_AFTER` seconds idle so
-you can share the GPU with other workloads (e.g. a local Ollama).
+Chatterbox loads on `cuda` (auto-falls back to CPU). Takes a few GB VRAM.
 
-First call after idle takes ~10s for the model to load; subsequent calls
-are fast.
+By default the model stays loaded once warm (`MIMIC_UNLOAD_AFTER=0`) — best
+for low-latency interactive use like Home Assistant voice. Set it to a
+positive number of seconds if you'd rather free VRAM after idle (useful
+when sharing the GPU with other workloads like a local Ollama). First call
+takes ~10s for the model to load; subsequent calls are fast.
 
 ## Auth
 

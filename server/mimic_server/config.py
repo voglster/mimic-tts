@@ -36,10 +36,10 @@ class Settings(BaseSettings):
     port: int = 8000
     reference_dir: Path = Field(default_factory=_default_reference_dir)
     model_cache: Path | None = Field(default_factory=_default_model_cache)
-    unload_after: int = 15
+    unload_after: int = 0  # 0 = keep model loaded forever; >0 = seconds idle before unload
     api_token: str | None = None
     log_level: str = "INFO"
-    backend: str = "qwen"
+    backend: str = "chatterbox"
 
     @computed_field  # type: ignore[prop-decorator]
     @property

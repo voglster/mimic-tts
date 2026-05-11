@@ -18,13 +18,13 @@ def test_loads_on_demand_and_caches():
         return FakeModel(model_id)
 
     mm = ModelManager(loader=loader, unload_after=60)
-    mm.register("clone", "Qwen/clone-id")
+    mm.register("clone", "engine/clone-id")
 
     a = mm.get("clone")
     b = mm.get("clone")
 
     assert a is b
-    assert calls == ["Qwen/clone-id"]
+    assert calls == ["engine/clone-id"]
 
 
 def test_get_unknown_key_raises():
@@ -35,7 +35,7 @@ def test_get_unknown_key_raises():
 
 def test_unload_all_clears_cache():
     mm = ModelManager(loader=lambda mid: FakeModel(mid), unload_after=60)
-    mm.register("clone", "Qwen/c")
+    mm.register("clone", "engine/c")
     mm.get("clone")
     mm.unload_all()
     assert mm.loaded_keys() == []
@@ -43,8 +43,8 @@ def test_unload_all_clears_cache():
 
 def test_status_reports_loaded_keys():
     mm = ModelManager(loader=lambda mid: FakeModel(mid), unload_after=60)
-    mm.register("clone", "Qwen/c")
-    mm.register("custom", "Qwen/cv")
+    mm.register("clone", "engine/c")
+    mm.register("custom", "engine/cv")
     mm.get("clone")
     assert mm.loaded_keys() == ["clone"]
 
@@ -52,7 +52,7 @@ def test_status_reports_loaded_keys():
 @pytest.mark.asyncio
 async def test_idle_watcher_unloads_after_timeout():
     mm = ModelManager(loader=lambda mid: FakeModel(mid), unload_after=0.05)
-    mm.register("clone", "Qwen/c")
+    mm.register("clone", "engine/c")
     mm.get("clone")
 
     task = asyncio.create_task(mm.run_unload_watcher(poll_interval=0.01))
@@ -67,7 +67,7 @@ async def test_idle_watcher_unloads_after_timeout():
 
 def test_get_resets_idle_timer(monkeypatch):  # noqa: ARG001
     mm = ModelManager(loader=lambda mid: FakeModel(mid), unload_after=60)
-    mm.register("clone", "Qwen/c")
+    mm.register("clone", "engine/c")
     mm.get("clone")
     t0 = mm.last_used()
     time.sleep(0.01)

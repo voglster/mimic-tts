@@ -1,13 +1,15 @@
 # mimic-tts
 
-Self-hosted **Qwen3-TTS** voice cloning + synthesis. Runs on your own GPU,
+Self-hosted **Chatterbox** voice cloning + synthesis. Runs on your own GPU,
 ships with a tiny Python client, never sends a recording off your machine.
 
 - Server — Docker image with on-demand model loading + idle unload.
 - Client — `pip install mimic-tts` for a `mimic` CLI and a Python
   library (sync **and** async).
-- Voice cloning — record a 10-second sample, register it, synthesize.
+- Voice cloning — zero-shot from a ~10-second reference clip.
 - Optional bearer auth — single env var flips it on.
+- Backend abstraction (`MIMIC_BACKEND`) — engine is swappable behind a
+  small protocol; today ships Chatterbox, easy to add others.
 
 ## Quick start (server, Docker)
 
@@ -24,19 +26,19 @@ Or with `docker-compose.yml` from this repo:
 docker compose up
 ```
 
-Requires NVIDIA GPU + nvidia-container-toolkit. First run downloads ~7GB of
-Qwen3-TTS weights into the `/data` volume; subsequent runs are fast.
+Requires NVIDIA GPU + nvidia-container-toolkit. First run downloads
+Chatterbox weights into the `/data` volume; subsequent runs are fast.
 
 ## Quick start (client)
 
 ```bash
 pip install mimic-tts
 
-mimic say "hello, this is a test" --out hello.wav
-mimic record alice                       # interactive: record + register a clone
+mimic say "hello, this is a test" --out hello.wav  # default voice
+mimic record alice --audio sample.wav --text "..."  # register a clone
 mimic clone say alice "now I sound like alice"
-mimic voices                             # list built-in voices
 mimic clones                             # list registered clones
+mimic voices                             # list built-in voices (just "default")
 ```
 
 The client reads `MIMIC_SERVER_URL` from the environment, or
@@ -45,7 +47,7 @@ The client reads `MIMIC_SERVER_URL` from the environment, or
 ```toml
 server_url = "http://nas.local:8000"
 token = "optional-bearer-token"
-default_voice = "Ryan"
+default_voice = "default"   # or any registered clone name
 ```
 
 ### Python library
@@ -54,7 +56,8 @@ default_voice = "Ryan"
 # Sync
 from mimic import Client
 with Client() as c:
-    c.tts_to_file("hello there", "out.wav", speaker="Ryan")
+    c.tts_to_file("hello there", "out.wav")     # default voice
+    c.clone_tts_to_file("alice", "hello there", "alice.wav")
 
 # Async
 from mimic import AsyncClient
@@ -66,7 +69,7 @@ async with AsyncClient() as c:
 
 | Method | Path                | What it does                                |
 |--------|---------------------|---------------------------------------------|
-| `POST` | `/tts`              | Built-in voice TTS (drop-in for `edge-tts`) |
+| `POST` | `/tts`              | Default-voice TTS (no reference)            |
 | `POST` | `/clone/register`   | Register a reference voice (file + transcript) |
 | `POST` | `/clone/tts`        | Synthesize using a registered clone         |
 | `POST` | `/clone/oneshot`    | Clone + synthesize in one call              |
@@ -79,12 +82,9 @@ endpoint except `/health`. Off by default.
 
 ## Built-in voices
 
-| Voice      | Language |
-|------------|----------|
-| Ryan, Aiden | English |
-| Vivian, Serena, Uncle_Fu, Dylan, Eric | Chinese |
-| Ono_Anna   | Japanese |
-| Sohee      | Korean   |
+Chatterbox does not ship named celebrity voices. The server exposes one
+built-in named `default` that uses Chatterbox's stock voice (no reference
+audio). For any other voice, register a clone.
 
 ## Privacy
 
@@ -101,8 +101,8 @@ by default — you would have to add them deliberately to commit them.
 
 ## Acknowledgements
 
-Built on top of [Qwen3-TTS](https://huggingface.co/Qwen/Qwen3-TTS-12Hz-1.7B-Base)
-by the Qwen Team. See `NOTICE` for full attribution.
+Built on top of [Chatterbox](https://github.com/resemble-ai/chatterbox) by
+Resemble AI. See `NOTICE` for full attribution.
 
 ## License
 

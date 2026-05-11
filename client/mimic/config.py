@@ -10,7 +10,7 @@ from pathlib import Path
 from platformdirs import user_config_path
 
 DEFAULT_SERVER_URL = "http://localhost:8000"
-DEFAULT_VOICE = "Ryan"
+DEFAULT_VOICE = "default"
 
 _KNOWN_TOML_KEYS = frozenset({"server_url", "token", "default_voice"})
 

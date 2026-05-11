@@ -12,7 +12,7 @@ from mimic_server.config import Settings
 def fake_backend():
     b = MagicMock()
     audio = np.zeros(1024, dtype=np.float32)
-    b.builtin_voices.return_value = [{"name": "Ryan", "language": "English"}]
+    b.builtin_voices.return_value = [{"name": "default", "language": "English"}]
     b.synth_builtin.return_value = (audio, 24000)
     b.synth_clone.return_value = (audio, 24000)
     b.synth_clone_oneshot.return_value = (audio, 24000)
@@ -36,7 +36,7 @@ def test_health_no_auth(tmp_path, fake_backend):
     assert r.status_code == 200
     body = r.json()
     assert body["status"] == "ok"
-    assert body["backend"] == "qwen"
+    assert body["backend"] == "chatterbox"
 
 
 def test_voices_unauthenticated_when_no_token(tmp_path, fake_backend):
@@ -56,7 +56,7 @@ def test_health_remains_open_even_with_token(tmp_path, fake_backend):
 
 def test_tts_endpoint_returns_wav(tmp_path, fake_backend):
     client = TestClient(_app(tmp_path, fake_backend))
-    r = client.post("/tts", data={"text": "hello", "speaker": "Ryan"})
+    r = client.post("/tts", data={"text": "hello", "speaker": "default"})
     assert r.status_code == 200
     assert r.headers["content-type"] == "audio/wav"
 
@@ -64,7 +64,7 @@ def test_tts_endpoint_returns_wav(tmp_path, fake_backend):
 def test_tts_unsupported_speaker_returns_400(tmp_path, fake_backend):
     """Backends surface unsupported built-in speakers as HTTP 400."""
     fake_backend.synth_builtin.side_effect = HTTPException(
-        status_code=400, detail="Unsupported speakers: ['jim']."
+        status_code=400, detail="No built-in voice 'jim'."
     )
     client = TestClient(_app(tmp_path, fake_backend))
     r = client.post("/tts", data={"text": "hi", "speaker": "jim"})

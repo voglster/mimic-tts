@@ -30,19 +30,7 @@ def _client() -> Client:
     return Client(server_url=cfg.server_url, token=cfg.token)
 
 
-BUILTIN_VOICE_NAMES: frozenset[str] = frozenset(
-    {
-        "Ryan",
-        "Aiden",
-        "Vivian",
-        "Serena",
-        "Uncle_Fu",
-        "Dylan",
-        "Eric",
-        "Ono_Anna",
-        "Sohee",
-    }
-)
+BUILTIN_VOICE_NAMES: frozenset[str] = frozenset({"default"})
 
 
 def _play_wav_bytes(wav: bytes) -> None:

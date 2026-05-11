@@ -23,6 +23,12 @@ dist/
 .env
 .env.local
 
+# Local-only Claude instructions (personal deployment notes, etc.)
+CLAUDE.local.md
+
+# Local voice samples / experiments (raw reference audio, ElevenLabs previews, etc.)
+voices/
+
 # IDE / OS junk
 .DS_Store
 .idea/

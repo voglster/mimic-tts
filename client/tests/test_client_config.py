@@ -10,7 +10,7 @@ def test_defaults_only(monkeypatch, tmp_path):
     cfg = load_config(config_dir=tmp_path)
     assert cfg.server_url == "http://localhost:8000"
     assert cfg.token is None
-    assert cfg.default_voice == "Ryan"
+    assert cfg.default_voice == "default"
 
 
 def test_env_overrides_defaults(monkeypatch, tmp_path):

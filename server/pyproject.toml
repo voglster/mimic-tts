@@ -1,13 +1,13 @@
 [project]
 name = "mimic-server"
 version = "0.0.4"
-description = "Self-hosted Qwen3-TTS server (mimic-tts)"
+description = "Self-hosted voice-cloning TTS server (mimic-tts)"
 requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi[standard]",
-    "qwen-tts",
-    "torch>=2.5.0,<2.6.0",
-    "torchaudio>=2.5.0,<2.6.0",
+    "chatterbox-tts",
+    "torch>=2.6.0,<2.7.0",
+    "torchaudio>=2.6.0,<2.7.0",
     "soundfile",
     "python-multipart",
     "pydantic-settings>=2.0",
@@ -36,10 +36,10 @@ packages = ["mimic_server"]
 index-url = "https://pypi.org/simple"
 
 [[tool.uv.index]]
-name = "pytorch-cu121"
-url = "https://download.pytorch.org/whl/cu121"
+name = "pytorch-cu124"
+url = "https://download.pytorch.org/whl/cu124"
 explicit = true
 
 [tool.uv.sources]
-torch = { index = "pytorch-cu121" }
-torchaudio = { index = "pytorch-cu121" }
+torch = { index = "pytorch-cu124" }
+torchaudio = { index = "pytorch-cu124" }

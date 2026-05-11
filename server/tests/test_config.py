@@ -22,7 +22,7 @@ def test_local_defaults(monkeypatch, tmp_path):
     assert s.port == 8000
     assert s.reference_dir == Path("reference").resolve()
     assert s.model_cache is None
-    assert s.unload_after == 15
+    assert s.unload_after == 0
     assert s.api_token is None
     assert s.log_level == "INFO"
 

@@ -60,6 +60,10 @@ class ModelManager[T]:
         return self._last_used
 
     async def run_unload_watcher(self, poll_interval: float = 5.0) -> None:
+        # unload_after <= 0 means "keep loaded forever" — skip the watcher entirely.
+        if self._unload_after <= 0:
+            logger.info("idle unload disabled (unload_after=%s)", self._unload_after)
+            return
         while True:
             await asyncio.sleep(poll_interval)
             with self._lock:
