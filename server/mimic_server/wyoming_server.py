@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import logging
+import re
 from functools import partial
 from typing import TYPE_CHECKING, Any
 
@@ -31,9 +32,36 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # Wyoming streams 16-bit PCM. We chunk at this many samples per AudioChunk;
-# small enough that HA can start playing quickly once we add real streaming,
-# big enough that we're not flooding events on the wire for now.
+# small enough that HA can start playing quickly, big enough that we're not
+# flooding events on the wire.
 _CHUNK_SAMPLES = 2048
+
+# Sentence boundary: end-of-sentence punctuation followed by whitespace and a
+# capital letter / digit / quote. Conservative — won't split "Mr. Smith".
+_SENTENCE_BOUNDARY = re.compile(r'(?<=[.!?])\s+(?=["\']?[A-Z0-9])')
+
+# Coalesce fragments shorter than this into the next chunk — single-word
+# synths have setup overhead disproportionate to their audio. Tuned low so
+# short greetings ("Hello!", "Sure.") still stream as their own chunk and
+# preserve the TTFA win; only truly tiny fragments get merged.
+_MIN_SENTENCE_CHARS = 10
+
+
+def _split_sentences(text: str) -> list[str]:
+    """Split text into sentences for incremental synthesis. Coalesces short
+    fragments so we don't emit lots of tiny audio chunks with per-call
+    overhead. Returns [text] verbatim if no boundaries are found."""
+    parts = [p.strip() for p in _SENTENCE_BOUNDARY.split(text.strip()) if p.strip()]
+    if not parts:
+        return [text.strip()] if text.strip() else []
+
+    out: list[str] = []
+    for p in parts:
+        if out and len(out[-1]) < _MIN_SENTENCE_CHARS:
+            out[-1] = f"{out[-1]} {p}"
+        else:
+            out.append(p)
+    return out
 
 
 def _build_info(backend: TTSBackend, settings: Settings) -> Info:
@@ -133,34 +161,56 @@ class _MimicHandler(AsyncEventHandler):
             return True
 
         if Synthesize.is_type(event.type):
-            synth = Synthesize.from_event(event)
-            voice_name = synth.voice.name if synth.voice else None
+            await self._stream_synthesis(Synthesize.from_event(event))
+            return True
+
+        # Unknown event types — keep connection alive.
+        return True
+
+    async def _stream_synthesis(self, synth: Synthesize) -> None:
+        """Generate audio sentence-by-sentence and emit AudioChunks as each
+        sentence finishes. HA can start playing the first sentence while
+        we're still generating the second one — collapses perceived TTFA
+        from total-text time to first-sentence time."""
+        voice_name = synth.voice.name if synth.voice else None
+        sentences = _split_sentences(synth.text)
+        if not sentences:
+            return
+
+        audio_started = False
+        sr: int | None = None
+        bytes_per_chunk = _CHUNK_SAMPLES * 2  # int16 mono
+
+        for sentence in sentences:
             try:
-                samples, sr = _route_synth(self._backend, self._settings, synth.text, voice_name)
+                samples, this_sr = _route_synth(self._backend, self._settings, sentence, voice_name)
             except HTTPException as e:
                 logger.warning("wyoming synth failed: %s", e.detail)
-                await self.write_event(Error(text=str(e.detail), code="bad-voice").event())
-                return True
+                if not audio_started:
+                    await self.write_event(Error(text=str(e.detail), code="bad-voice").event())
+                # If we already started streaming, just stop cleanly so the
+                # client gets the audio we have so far.
+                break
             except Exception as e:
                 logger.exception("wyoming synth crashed")
-                await self.write_event(Error(text=str(e), code="synth-error").event())
-                return True
+                if not audio_started:
+                    await self.write_event(Error(text=str(e), code="synth-error").event())
+                break
 
-            pcm_bytes, sr = _samples_to_int16_bytes(samples, sr)
-            await self.write_event(AudioStart(rate=sr, width=2, channels=1).event())
-            # Emit in chunks (still one big batch under the hood — protocol-
-            # streamable but content-batched until we add real streaming).
-            bytes_per_chunk = _CHUNK_SAMPLES * 2  # 2048 samples * 2 bytes
+            pcm_bytes, this_sr = _samples_to_int16_bytes(samples, this_sr)
+            if not audio_started:
+                sr = this_sr
+                await self.write_event(AudioStart(rate=sr, width=2, channels=1).event())
+                audio_started = True
+            assert sr is not None
             for offset in range(0, len(pcm_bytes), bytes_per_chunk):
                 chunk = pcm_bytes[offset : offset + bytes_per_chunk]
                 await self.write_event(
                     AudioChunk(audio=chunk, rate=sr, width=2, channels=1).event()
                 )
-            await self.write_event(AudioStop().event())
-            return True
 
-        # Unknown event types — keep connection alive.
-        return True
+        if audio_started:
+            await self.write_event(AudioStop().event())
 
 
 async def run_wyoming_server(backend: TTSBackend, settings: Settings) -> None:

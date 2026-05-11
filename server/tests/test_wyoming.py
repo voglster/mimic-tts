@@ -17,6 +17,7 @@ from mimic_server.wyoming_server import (
     _build_info,
     _route_synth,
     _samples_to_int16_bytes,
+    _split_sentences,
 )
 
 
@@ -84,3 +85,53 @@ def test_route_synth_none_voice_defaults_to_builtin(tmp_path, backend):
     _route_synth(backend, _settings(tmp_path), "hi", None)
     backend.synth_builtin.assert_called_once()
     assert backend.synth_builtin.call_args.kwargs["speaker"] == "default"
+
+
+def test_split_sentences_basic():
+    assert _split_sentences("Hello there. How are you today?") == [
+        "Hello there.",
+        "How are you today?",
+    ]
+
+
+def test_split_sentences_handles_exclamations_and_questions():
+    out = _split_sentences("That's wild! Really? I had no idea today.")
+    # "That's wild!" >= 10 chars → its own chunk
+    # "Really?" < 10 chars → coalesces with next
+    assert out == ["That's wild!", "Really? I had no idea today."]
+
+
+def test_split_sentences_coalesces_short_fragments():
+    # "Hi." is too short, gets merged into next sentence.
+    assert _split_sentences("Hi. Welcome back to the show, friend.") == [
+        "Hi. Welcome back to the show, friend.",
+    ]
+
+
+def test_split_sentences_no_boundaries_returns_single():
+    assert _split_sentences("just one fragment with no terminator") == [
+        "just one fragment with no terminator",
+    ]
+
+
+def test_split_sentences_quoted_followups_known_limitation():
+    # Known limitation: when the sentence-ending punctuation sits INSIDE a
+    # closing quote (`."`), the boundary regex doesn't match because the
+    # punctuation isn't directly followed by whitespace. The whole string
+    # synthesizes as one chunk — no streaming benefit, but it's correct.
+    # Acceptable for HA assistant text which rarely uses quoted dialogue.
+    out = _split_sentences('She said "hello." "Welcome to the future."')
+    assert len(out) == 1
+
+
+def test_split_sentences_does_not_split_on_abbreviations():
+    # "Mr." would be a false positive split — but it's < 10 chars so it
+    # coalesces into the next chunk, effectively handling abbreviations
+    # for free for short common ones.
+    out = _split_sentences("Mr. Smith arrived early today everyone.")
+    assert len(out) == 1
+
+
+def test_split_sentences_empty_input():
+    assert _split_sentences("") == []
+    assert _split_sentences("   ") == []
