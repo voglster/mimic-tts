@@ -6,6 +6,10 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi[standard]",
     "chatterbox-tts",
+    # perth (chatterbox's watermarker dep) imports pkg_resources from setuptools,
+    # which Python 3.12+ no longer ships by default. Without this, model load
+    # silently sets PerthImplicitWatermarker = None and crashes at synth time.
+    "setuptools",
     "torch>=2.6.0,<2.7.0",
     "torchaudio>=2.6.0,<2.7.0",
     "soundfile",
