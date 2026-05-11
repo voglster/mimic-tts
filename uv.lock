@@ -756,7 +756,7 @@ wheels = [
 
 [[package]]
 name = "mimic-server"
-version = "0.1.1"
+version = "0.1.3"
 source = { editable = "server" }
 dependencies = [
     { name = "chatterbox-tts" },
@@ -767,6 +767,7 @@ dependencies = [
     { name = "soundfile" },
     { name = "torch" },
     { name = "torchaudio" },
+    { name = "wyoming" },
 ]
 
 [package.optional-dependencies]
@@ -793,12 +794,13 @@ requires-dist = [
     { name = "soundfile" },
     { name = "torch", specifier = ">=2.6.0,<2.7.0", index = "https://download.pytorch.org/whl/cu124" },
     { name = "torchaudio", specifier = ">=2.6.0,<2.7.0", index = "https://download.pytorch.org/whl/cu124" },
+    { name = "wyoming", specifier = ">=1.5" },
 ]
 provides-extras = ["dev"]
 
 [[package]]
 name = "mimic-tts"
-version = "0.1.1"
+version = "0.1.3"
 source = { editable = "client" }
 dependencies = [
     { name = "httpx" },
@@ -2189,6 +2191,15 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/8e/b2/feecfe29f28483d888d76a48f03c4c4d8afea944dbee2b0cd3380f9df032/wrapt-2.1.2-cp312-cp312-win_amd64.whl", hash = "sha256:1c51c738d7d9faa0b3601708e7e2eda9bf779e1b601dce6c77411f2a1b324a63", size = 60441, upload-time = "2026-03-06T02:52:47.138Z" },
     { url = "https://files.pythonhosted.org/packages/44/e1/e328f605d6e208547ea9fd120804fcdec68536ac748987a68c47c606eea8/wrapt-2.1.2-cp312-cp312-win_arm64.whl", hash = "sha256:c8e46ae8e4032792eb2f677dbd0d557170a8e5524d22acc55199f43efedd39bf", size = 58836, upload-time = "2026-03-06T02:53:22.053Z" },
     { url = "https://files.pythonhosted.org/packages/1a/c7/8528ac2dfa2c1e6708f647df7ae144ead13f0a31146f43c7264b4942bf12/wrapt-2.1.2-py3-none-any.whl", hash = "sha256:b8fd6fa2b2c4e7621808f8c62e8317f4aae56e59721ad933bac5239d913cf0e8", size = 43993, upload-time = "2026-03-06T02:53:12.905Z" },
+]
+
+[[package]]
+name = "wyoming"
+version = "1.8.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/c5/ab/8984e755731fac96405b3ecc2236887855120afb9760f829291bd618c26d/wyoming-1.8.0.tar.gz", hash = "sha256:90c16c9fb7e90cbce277032806b7816e6c631812393206a73298f4ad4ffcdb76", size = 37388, upload-time = "2025-10-10T20:49:43.151Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/70/b3/8fbcbd8b6587cb33a7deafc5f20a1ec96ee40e8f7a9c2eccc1982a4e0f06/wyoming-1.8.0-py3-none-any.whl", hash = "sha256:1bbd9fb2af1fcc7dc8d397821438ff89173d2aed33f1092c62aae0b3ce6d168d", size = 39282, upload-time = "2025-10-10T20:49:41.911Z" },
 ]
 
 [[package]]

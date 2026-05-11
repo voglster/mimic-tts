@@ -6,6 +6,7 @@ requires-python = ">=3.12,<3.13"
 dependencies = [
     "fastapi[standard]",
     "chatterbox-tts",
+    "wyoming>=1.5",
     # perth (chatterbox's watermarker dep) imports `pkg_resources`, which was
     # removed as an importable module in setuptools 81. Pin <81 so it stays
     # available. Without it, model load silently sets PerthImplicitWatermarker

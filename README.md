@@ -10,6 +10,10 @@ ships with a tiny Python client, never sends a recording off your machine.
 - Optional bearer auth — single env var flips it on.
 - Backend abstraction (`MIMIC_BACKEND`) — engine is swappable behind a
   small protocol; today ships Chatterbox, easy to add others.
+- OpenAI-compatible `/v1/audio/speech` for HA `sfortis/openai_tts`,
+  open-webui, etc.
+- Optional Wyoming protocol server (HA-native voice pipeline) on a
+  separate TCP port — same process, shared model in VRAM.
 
 ## Quick start (server, Docker)
 

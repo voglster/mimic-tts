@@ -18,6 +18,9 @@ distributed via PyPI — install it via Docker or from source).
 | `MIMIC_LOG_LEVEL` | `INFO` | `INFO` | Log level |
 | `MIMIC_BACKEND` | `chatterbox` | `chatterbox` | TTS engine (currently only `chatterbox`) |
 | `MIMIC_ALLOW_UNAUTHENTICATED_PUBLIC_BIND` | `false` | `false` | Allow public bind without `MIMIC_API_TOKEN` (set when a reverse proxy / tailnet ACL handles auth upstream) |
+| `MIMIC_WYOMING_ENABLED` | `false` | `false` | Start the Wyoming TCP server alongside FastAPI (shared model in VRAM) |
+| `MIMIC_WYOMING_HOST` | `0.0.0.0` | `0.0.0.0` | Wyoming bind interface (inside the container — host firewall is the actual boundary) |
+| `MIMIC_WYOMING_PORT` | `10200` | `10200` | Wyoming TCP port |
 
 ## Endpoints
 
@@ -87,6 +90,37 @@ and `MIMIC_API_TOKEN` is unset, the server refuses to start. This prevents
 the "oops I exposed it" scenario. If a reverse proxy / tailnet ACL is
 enforcing auth upstream and you really do want no app-level token, set
 `MIMIC_ALLOW_UNAUTHENTICATED_PUBLIC_BIND=1` explicitly.
+
+## Wyoming protocol (Home Assistant voice pipeline)
+
+Opt-in via `MIMIC_WYOMING_ENABLED=true`. When enabled, a Wyoming TCP server
+runs in the same process as FastAPI — both share the loaded model in VRAM,
+no duplication.
+
+**No auth**: the Wyoming protocol does not support auth, TLS, or any
+handshake. The trust boundary is the network. The container binds to
+`0.0.0.0:10200` by default; protect it by:
+
+- Mapping the host port only to tailnet / LAN interfaces, or
+- Not adding a public reverse-proxy entry for port 10200 (your existing
+  HTTP reverse proxy won't accidentally pick this up — Wyoming is TCP, not
+  HTTP).
+
+Add to your `docker-compose.yml`:
+
+```yaml
+services:
+  mimic-tts:
+    ports:
+      - "8000:8000"
+      - "10200:10200"   # Wyoming — keep off the public internet
+    environment:
+      MIMIC_WYOMING_ENABLED: "true"
+```
+
+Then in Home Assistant, add the Wyoming integration pointing at
+`tcp://<llmbox-host>:10200`. HA will discover the registered voices
+(built-ins + clones) via the `Describe` event.
 
 There's intentionally no token rotation, no per-user tokens, no JWT, and no
 TLS termination — that's your reverse proxy's job. See

@@ -105,6 +105,28 @@ class _OpenAISpeechRequest(BaseModel):
     speed: float = 1.0  # ignored — Chatterbox has no native speed knob
 
 
+def _make_lifespan(backend: TTSBackend, settings: Settings) -> Any:
+    """Build the FastAPI lifespan that supervises backend + optional Wyoming."""
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        import asyncio
+
+        tasks = [asyncio.create_task(backend.run_lifecycle())]
+        if settings.wyoming_enabled:
+            from mimic_server.wyoming_server import run_wyoming_server
+
+            tasks.append(asyncio.create_task(run_wyoming_server(backend, settings)))
+        try:
+            yield
+        finally:
+            for t in tasks:
+                t.cancel()
+            backend.unload()
+
+    return lifespan
+
+
 def _handle_openai_speech(
     req: _OpenAISpeechRequest, backend: TTSBackend, settings: Settings
 ) -> Response:
@@ -152,19 +174,7 @@ def build_app(
 
     backend = (backend_factory or make_backend)(settings)
     auth = Depends(require_token(settings))
-
-    @asynccontextmanager
-    async def lifespan(_: FastAPI):
-        import asyncio
-
-        task = asyncio.create_task(backend.run_lifecycle())
-        try:
-            yield
-        finally:
-            task.cancel()
-            backend.unload()
-
-    app = FastAPI(title="mimic-tts API", lifespan=lifespan)
+    app = FastAPI(title="mimic-tts API", lifespan=_make_lifespan(backend, settings))
 
     @app.get("/health")
     async def health() -> dict[str, Any]:

@@ -41,6 +41,13 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     backend: str = "chatterbox"
     allow_unauthenticated_public_bind: bool = False  # escape hatch; see app.py
+    # Wyoming protocol server (HA-native voice pipeline). Opt-in. Has NO auth —
+    # the protocol does not support it. Bind to all interfaces inside the
+    # container; the access boundary is the host's port-forward / firewall.
+    # Do NOT expose port 10200 to the public internet.
+    wyoming_enabled: bool = False
+    wyoming_host: str = "0.0.0.0"
+    wyoming_port: int = 10200
 
     @computed_field  # type: ignore[prop-decorator]
     @property
