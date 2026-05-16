@@ -1,11 +1,22 @@
+import io
 from unittest.mock import MagicMock
 
 import numpy as np
 import pytest
+import soundfile as sf
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from mimic_server.app import build_app
 from mimic_server.config import Settings
+
+
+def _silent_wav_bytes(duration_s: float = 0.5, sample_rate: int = 24000) -> bytes:
+    """A real WAV blob ffmpeg will accept — used by tests that exercise the
+    clone-register / clone-oneshot upload path now that we transcode."""
+    samples = np.zeros(int(duration_s * sample_rate), dtype=np.float32)
+    buf = io.BytesIO()
+    sf.write(buf, samples, sample_rate, format="WAV", subtype="PCM_16")
+    return buf.getvalue()
 
 
 @pytest.fixture
@@ -74,16 +85,32 @@ def test_tts_unsupported_speaker_returns_400(tmp_path, fake_backend):
 
 def test_clone_register_writes_files_and_lists_voice(tmp_path, fake_backend):
     client = TestClient(_app(tmp_path, fake_backend))
+    wav = _silent_wav_bytes()
     r = client.post(
         "/clone/register",
         data={"ref_text": "hi there", "name": "alice"},
-        files={"ref_audio": ("a.wav", b"\x00\x01\x02", "audio/wav")},
+        files={"ref_audio": ("a.wav", wav, "audio/wav")},
     )
     assert r.status_code == 200
-    assert (tmp_path / "alice" / "audio.wav").read_bytes() == b"\x00\x01\x02"
+    # Stored file is now ffmpeg's re-muxed WAV — verify it's a readable WAV
+    # rather than asserting byte-equality with the input.
+    stored = (tmp_path / "alice" / "audio.wav").read_bytes()
+    assert stored.startswith(b"RIFF")
+    assert b"WAVE" in stored[:12]
     assert (tmp_path / "alice" / "text.txt").read_text() == "hi there"
     r = client.get("/clone/voices")
     assert r.json() == {"voices": ["alice"]}
+
+
+def test_clone_register_rejects_undecodable_audio(tmp_path, fake_backend):
+    client = TestClient(_app(tmp_path, fake_backend))
+    r = client.post(
+        "/clone/register",
+        data={"ref_text": "hi", "name": "alice"},
+        files={"ref_audio": ("garbage.bin", b"not audio at all", "application/octet-stream")},
+    )
+    assert r.status_code == 400
+    assert "decode" in r.json()["detail"].lower() or "ffmpeg" in r.json()["detail"].lower()
 
 
 def test_clone_tts_unknown_voice_returns_400(tmp_path, fake_backend):

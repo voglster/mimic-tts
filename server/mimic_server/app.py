@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import io
 import logging
+import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import TYPE_CHECKING, Annotated, Any
 
 import soundfile as sf
 from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import Response, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from mimic_server.auth import require_token
@@ -160,6 +163,51 @@ def _handle_openai_speech(
     return Response(content=buf.getvalue(), media_type=content_type)
 
 
+def _transcode_to_wav(data: bytes) -> bytes:
+    """Convert any audio container ffmpeg understands into 24 kHz mono 16-bit
+    WAV. Used to normalize browser uploads (WebM/Opus, MP4/AAC) before we hand
+    the file to the TTS backend, which only speaks soundfile-readable formats.
+
+    WAV input is also accepted (idempotent re-mux), so the CLI client doesn't
+    need to know which path it's on.
+    """
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                "pipe:0",
+                "-ac",
+                "1",
+                "-ar",
+                "24000",
+                "-c:a",
+                "pcm_s16le",
+                "-f",
+                "wav",
+                "pipe:1",
+            ],
+            input=data,
+            capture_output=True,
+            check=True,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(
+            500, "ffmpeg is not installed on the server"
+        ) from e
+    except subprocess.CalledProcessError as e:
+        stderr = e.stderr.decode(errors="replace") if e.stderr else ""
+        raise HTTPException(
+            400, f"could not decode uploaded audio: {stderr.strip() or 'ffmpeg failed'}"
+        ) from e
+    return proc.stdout
+
+
 def build_app(
     settings: Settings,
     backend_factory: Callable[[Settings], TTSBackend] | None = None,
@@ -217,9 +265,10 @@ def build_app(
         name: Annotated[str, Form()] = "default",
     ) -> dict[str, str]:
         audio_bytes = await ref_audio.read()
+        wav_bytes = _transcode_to_wav(audio_bytes)
         ref_dir = settings.reference_dir / name
         ref_dir.mkdir(parents=True, exist_ok=True)
-        (ref_dir / "audio.wav").write_bytes(audio_bytes)
+        (ref_dir / "audio.wav").write_bytes(wav_bytes)
         (ref_dir / "text.txt").write_text(ref_text)
         return {"status": "ok", "name": name}
 
@@ -251,15 +300,37 @@ def build_app(
         language: Annotated[str, Form()] = "English",
     ):
         audio_bytes = await ref_audio.read()
+        wav_bytes = _transcode_to_wav(audio_bytes)
         samples, sr = backend.synth_clone_oneshot(
             text=text,
-            ref_audio_bytes=audio_bytes,
+            ref_audio_bytes=wav_bytes,
             ref_text=ref_text,
             language=language,
         )
         return _wav_response(samples, sr)
 
+    _mount_web_ui(app)
     return app
+
+
+def _mount_web_ui(app: FastAPI) -> None:
+    """If MIMIC_WEB_DIST points at a built UI directory, serve it at '/'.
+
+    StaticFiles is mounted LAST so the API routes registered above take
+    precedence in route matching — `/health`, `/voices`, etc. still resolve
+    to the handlers, not to files in the dist tree.
+    """
+    web_dist = os.environ.get("MIMIC_WEB_DIST", "")
+    if not web_dist:
+        return
+    dist_path = Path(web_dist)
+    if not dist_path.is_dir():
+        logger.warning(
+            "MIMIC_WEB_DIST=%s does not exist; skipping web UI mount", web_dist
+        )
+        return
+    app.mount("/", StaticFiles(directory=dist_path, html=True), name="web")
+    logger.info("serving web UI from %s", dist_path)
 
 
 # Default app for `uvicorn mimic_server.app:app` and the console entry.
