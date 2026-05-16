@@ -147,6 +147,39 @@ def test_health_reports_stt_flag(tmp_path, fake_backend):
     assert r.json()["stt_enabled"] is False
 
 
+def test_tts_default_returns_wav(tmp_path, fake_backend):
+    client = TestClient(_app(tmp_path, fake_backend))
+    r = client.post("/tts", data={"text": "hi"})
+    assert r.status_code == 200
+    assert r.headers["content-type"].startswith("audio/wav")
+
+
+def test_tts_format_mp3_routes_through_ffmpeg(tmp_path, fake_backend):
+    client = TestClient(_app(tmp_path, fake_backend))
+    r = client.post("/tts", data={"text": "hi", "format": "mp3"})
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "audio/mpeg"
+    # MP3 frame headers start with 0xFFFB / 0xFFF3 / 0xFFFA / etc. (sync word).
+    # Just verify the body is non-empty and doesn't look like a WAV RIFF.
+    assert len(r.content) > 0
+    assert not r.content.startswith(b"RIFF")
+
+
+def test_tts_format_opus_returns_ogg(tmp_path, fake_backend):
+    client = TestClient(_app(tmp_path, fake_backend))
+    r = client.post("/tts", data={"text": "hi", "format": "opus"})
+    assert r.status_code == 200
+    assert r.headers["content-type"] == "audio/ogg"
+    assert r.content.startswith(b"OggS")
+
+
+def test_tts_unknown_format_returns_400(tmp_path, fake_backend):
+    client = TestClient(_app(tmp_path, fake_backend))
+    r = client.post("/tts", data={"text": "hi", "format": "made-up"})
+    assert r.status_code == 400
+    assert "format" in r.json()["detail"].lower()
+
+
 def test_clone_tts_unknown_voice_returns_400(tmp_path, fake_backend):
     client = TestClient(_app(tmp_path, fake_backend))
     r = client.post("/clone/tts", data={"text": "hi", "name": "nobody"})

@@ -89,6 +89,9 @@ export async function listVoices() {
 export async function speak(text, voice) {
   const form = new FormData()
   form.append('text', text)
+  // mp3 plays on every browser including iOS < 17, and the 64 kbps the server
+  // emits is ~6x smaller than the raw WAV — much better for phone playback.
+  form.append('format', 'mp3')
   let endpoint
   if (voice.kind === 'builtin') {
     form.append('speaker', voice.name)

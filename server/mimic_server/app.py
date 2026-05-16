@@ -38,6 +38,80 @@ def _wav_response(
     )
 
 
+# Output containers we can hand to ffmpeg, keyed by the value clients send in
+# the `format` form field. Value is (ffmpeg muxer, ffmpeg codec args, MIME).
+# Bitrates are speech-tuned — libopus at 24k sounds great for voice and is
+# ~4 KB/sec; libmp3lame at 64k is the universal-compatibility fallback (~8
+# KB/sec) and plays on iOS < 17 too.
+_FFMPEG_FORMATS: dict[str, tuple[str, list[str], str, str]] = {
+    "mp3": ("mp3", ["-c:a", "libmp3lame", "-b:a", "64k"], "audio/mpeg", "mp3"),
+    "opus": ("ogg", ["-c:a", "libopus", "-b:a", "24k"], "audio/ogg", "ogg"),
+    "aac": ("adts", ["-c:a", "aac", "-b:a", "64k"], "audio/aac", "aac"),
+}
+
+
+def _audio_response(
+    samples: Any, sample_rate: int, fmt: str = "wav", filename_stem: str = "output"
+) -> StreamingResponse | Response:
+    """Encode the TTS output as the requested container. `wav` and `flac` go
+    through soundfile; everything else is re-encoded by ffmpeg from a WAV
+    intermediate. Defaults to wav for backwards-compatibility with the CLI
+    and any Wyoming-style consumers."""
+    fmt = fmt.lower()
+    if fmt == "wav":
+        return _wav_response(samples, sample_rate, filename=f"{filename_stem}.wav")
+    if fmt == "flac":
+        buf = io.BytesIO()
+        sf.write(buf, samples, sample_rate, format="FLAC")
+        return Response(
+            content=buf.getvalue(),
+            media_type="audio/flac",
+            headers={"Content-Disposition": f'inline; filename="{filename_stem}.flac"'},
+        )
+    if fmt not in _FFMPEG_FORMATS:
+        raise HTTPException(
+            400,
+            f"unsupported audio format {fmt!r}; supported: wav, flac, {', '.join(_FFMPEG_FORMATS)}",
+        )
+    # Render to WAV first (avoids juggling raw PCM dtype/shape through ffmpeg
+    # stdin) and re-encode. ffmpeg autodetects WAV on stdin.
+    wav_buf = io.BytesIO()
+    sf.write(wav_buf, samples, sample_rate, format="WAV")
+    muxer, codec_args, mime, ext = _FFMPEG_FORMATS[fmt]
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            [
+                "ffmpeg",
+                "-hide_banner",
+                "-loglevel",
+                "error",
+                "-i",
+                "pipe:0",
+                *codec_args,
+                "-f",
+                muxer,
+                "pipe:1",
+            ],
+            input=wav_buf.getvalue(),
+            capture_output=True,
+            check=True,
+        )
+    except FileNotFoundError as e:
+        raise HTTPException(500, "ffmpeg is not installed on the server") from e
+    except subprocess.CalledProcessError as e:
+        stderr = e.stderr.decode(errors="replace") if e.stderr else ""
+        raise HTTPException(
+            500, f"audio encoding failed: {stderr.strip() or 'ffmpeg failed'}"
+        ) from e
+    return Response(
+        content=proc.stdout,
+        media_type=mime,
+        headers={"Content-Disposition": f'inline; filename="{filename_stem}.{ext}"'},
+    )
+
+
 def _configure_environment(settings: Settings) -> None:
     """Apply environment-level settings (logging, HF_HOME, dirs) and enforce
     the public-bind-needs-auth safety check."""
@@ -250,6 +324,7 @@ def build_app(  # noqa: C901 — flat route registration; complexity is incident
         language: Annotated[str, Form()] = "English",
         speaker: Annotated[str, Form()] = "default",
         instruct: Annotated[str, Form()] = "",
+        fmt: Annotated[str, Form(alias="format")] = "wav",
     ):
         samples, sr = backend.synth_builtin(
             text=text,
@@ -257,7 +332,7 @@ def build_app(  # noqa: C901 — flat route registration; complexity is incident
             language=language,
             instruct=instruct or None,
         )
-        return _wav_response(samples, sr)
+        return _audio_response(samples, sr, fmt=fmt)
 
     @app.post("/clone/register", dependencies=[auth])
     async def clone_register(
@@ -316,6 +391,7 @@ def build_app(  # noqa: C901 — flat route registration; complexity is incident
         text: Annotated[str, Form()],
         language: Annotated[str, Form()] = "English",
         name: Annotated[str, Form()] = "default",
+        fmt: Annotated[str, Form(alias="format")] = "wav",
     ):
         ref_path, ref_text = _resolve_clone(settings, name)
         samples, sr = backend.synth_clone(
@@ -325,7 +401,7 @@ def build_app(  # noqa: C901 — flat route registration; complexity is incident
             ref_text=ref_text,
             language=language,
         )
-        return _wav_response(samples, sr)
+        return _audio_response(samples, sr, fmt=fmt)
 
     @app.post("/v1/audio/speech", dependencies=[auth])
     async def openai_speech(req: _OpenAISpeechRequest) -> Response:
@@ -337,6 +413,7 @@ def build_app(  # noqa: C901 — flat route registration; complexity is incident
         ref_audio: Annotated[UploadFile, File()],
         ref_text: Annotated[str, Form()],
         language: Annotated[str, Form()] = "English",
+        fmt: Annotated[str, Form(alias="format")] = "wav",
     ):
         audio_bytes = await ref_audio.read()
         wav_bytes = _transcode_to_wav(audio_bytes)
@@ -346,7 +423,7 @@ def build_app(  # noqa: C901 — flat route registration; complexity is incident
             ref_text=ref_text,
             language=language,
         )
-        return _wav_response(samples, sr)
+        return _audio_response(samples, sr, fmt=fmt)
 
     _mount_web_ui(app)
     return app
