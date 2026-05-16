@@ -268,9 +268,7 @@ class _MimicHandler(AsyncEventHandler):
         bytes_per_chunk = _CHUNK_SAMPLES * 2  # int16 mono
         for offset in range(0, len(pcm_bytes), bytes_per_chunk):
             chunk = pcm_bytes[offset : offset + bytes_per_chunk]
-            await self.write_event(
-                AudioChunk(audio=chunk, rate=sr, width=2, channels=1).event()
-            )
+            await self.write_event(AudioChunk(audio=chunk, rate=sr, width=2, channels=1).event())
 
     async def _stream_synthesis(self, synth: Synthesize) -> None:
         """Legacy one-shot path: full text in a single Synthesize event.

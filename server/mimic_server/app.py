@@ -197,9 +197,7 @@ def _transcode_to_wav(data: bytes) -> bytes:
             check=True,
         )
     except FileNotFoundError as e:
-        raise HTTPException(
-            500, "ffmpeg is not installed on the server"
-        ) from e
+        raise HTTPException(500, "ffmpeg is not installed on the server") from e
     except subprocess.CalledProcessError as e:
         stderr = e.stderr.decode(errors="replace") if e.stderr else ""
         raise HTTPException(
@@ -325,9 +323,7 @@ def _mount_web_ui(app: FastAPI) -> None:
         return
     dist_path = Path(web_dist)
     if not dist_path.is_dir():
-        logger.warning(
-            "MIMIC_WEB_DIST=%s does not exist; skipping web UI mount", web_dist
-        )
+        logger.warning("MIMIC_WEB_DIST=%s does not exist; skipping web UI mount", web_dist)
         return
     app.mount("/", StaticFiles(directory=dist_path, html=True), name="web")
     logger.info("serving web UI from %s", dist_path)

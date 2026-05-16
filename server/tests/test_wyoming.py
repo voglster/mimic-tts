@@ -184,9 +184,7 @@ def _event_types(events):
 async def test_streaming_session_emits_audio_before_stop(tmp_path, backend):
     handler = _make_handler(tmp_path, backend)
 
-    await handler.handle_event(
-        SynthesizeStart(voice=SynthesizeVoice(name="default")).event()
-    )
+    await handler.handle_event(SynthesizeStart(voice=SynthesizeVoice(name="default")).event())
     # Boundary regex needs ".\s+[A-Z]" all visible — sentence 1 only flushes
     # once enough of sentence 2 has arrived. Mirror the realistic HA flow:
     # tokens stream in, boundary becomes visible mid-stream.
@@ -241,7 +239,9 @@ async def test_streaming_session_handles_split_across_chunks(tmp_path, backend):
 async def test_legacy_synthesize_still_works(tmp_path, backend):
     handler = _make_handler(tmp_path, backend)
     await handler.handle_event(
-        Synthesize(text="One two three. Four five six seven.", voice=SynthesizeVoice(name="default")).event()
+        Synthesize(
+            text="One two three. Four five six seven.", voice=SynthesizeVoice(name="default")
+        ).event()
     )
     types = _event_types(handler.events)
     assert AudioStart.is_type(types[0])
