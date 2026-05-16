@@ -13,6 +13,8 @@ jobs:
       - uses: astral-sh/setup-uv@v3
         with:
           python-version: "3.12"
+      - name: Install ffmpeg
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
       - name: Sync workspace
         run: uv sync --all-packages --all-extras
       - name: Ruff format check
