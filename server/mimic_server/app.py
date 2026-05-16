@@ -163,13 +163,15 @@ def _handle_openai_speech(
     return Response(content=buf.getvalue(), media_type=content_type)
 
 
-def _transcode_to_wav(data: bytes) -> bytes:
-    """Convert any audio container ffmpeg understands into 24 kHz mono 16-bit
-    WAV. Used to normalize browser uploads (WebM/Opus, MP4/AAC) before we hand
-    the file to the TTS backend, which only speaks soundfile-readable formats.
+def _transcode_to_wav(data: bytes, sample_rate: int = 24000) -> bytes:
+    """Convert any audio container ffmpeg understands into mono 16-bit WAV at
+    the requested rate. Used to normalize browser uploads (WebM/Opus, MP4/AAC)
+    before we hand the file to a backend that only speaks soundfile-readable
+    formats.
 
     WAV input is also accepted (idempotent re-mux), so the CLI client doesn't
-    need to know which path it's on.
+    need to know which path it's on. Default rate is 24 kHz (TTS reference);
+    pass 16000 for whisper/STT.
     """
     import subprocess
 
@@ -185,7 +187,7 @@ def _transcode_to_wav(data: bytes) -> bytes:
                 "-ac",
                 "1",
                 "-ar",
-                "24000",
+                str(sample_rate),
                 "-c:a",
                 "pcm_s16le",
                 "-f",
@@ -206,7 +208,7 @@ def _transcode_to_wav(data: bytes) -> bytes:
     return proc.stdout
 
 
-def build_app(
+def build_app(  # noqa: C901 — flat route registration; complexity is incidental
     settings: Settings,
     backend_factory: Callable[[Settings], TTSBackend] | None = None,
 ) -> FastAPI:
@@ -230,6 +232,7 @@ def build_app(
             "backend": settings.backend,
             "models_loaded": backend.loaded_keys(),
             "registered_voices": on_disk,
+            "stt_enabled": bool(settings.stt_uri),
         }
 
     @app.get("/voices", dependencies=[auth])
@@ -269,6 +272,44 @@ def build_app(
         (ref_dir / "audio.wav").write_bytes(wav_bytes)
         (ref_dir / "text.txt").write_text(ref_text)
         return {"status": "ok", "name": name}
+
+    @app.delete("/clone/voices/{name}", dependencies=[auth])
+    async def clone_delete(name: str) -> dict[str, str]:
+        # Block path traversal by rejecting anything that isn't a plain
+        # directory name we'd accept on register.
+        if "/" in name or "\\" in name or name in {"", ".", ".."}:
+            raise HTTPException(400, f"invalid voice name {name!r}")
+        ref_dir = settings.reference_dir / name
+        if not ref_dir.is_dir():
+            raise HTTPException(404, f"no voice {name!r} registered")
+        # Drop the loaded model first if the backend has it cached, so the
+        # next synth for a re-registered same-name doesn't reuse stale audio.
+        try:
+            backend.drop_clone(name)  # type: ignore[attr-defined]
+        except (AttributeError, KeyError):
+            pass
+        import shutil
+
+        shutil.rmtree(ref_dir)
+        return {"status": "ok", "name": name}
+
+    @app.post("/stt", dependencies=[auth])
+    async def stt(audio: Annotated[UploadFile, File()]) -> dict[str, str]:
+        from mimic_server.stt import STTUnavailableError, transcribe
+
+        if not settings.stt_uri:
+            raise HTTPException(503, "STT is not configured (set MIMIC_STT_URI)")
+        audio_bytes = await audio.read()
+        wav_bytes = _transcode_to_wav(audio_bytes, sample_rate=16000)
+        try:
+            text = await transcribe(wav_bytes, settings.stt_uri)
+        except STTUnavailableError as e:
+            raise HTTPException(503, str(e)) from e
+        except OSError as e:
+            raise HTTPException(
+                502, f"could not reach STT server at {settings.stt_uri}: {e}"
+            ) from e
+        return {"text": text}
 
     @app.post("/clone/tts", dependencies=[auth])
     async def clone_tts(

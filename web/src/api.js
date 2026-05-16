@@ -106,6 +106,32 @@ export async function speak(text, voice) {
   return r.blob()
 }
 
+export async function transcribe(audioBlob) {
+  const form = new FormData()
+  const ext = extFromMime(audioBlob.type)
+  form.append('audio', audioBlob, `clip.${ext}`)
+  const r = await request('/stt', { method: 'POST', headers: authHeaders(), body: form })
+  if (!r.ok) throw new Error(await readError(r))
+  const j = await r.json()
+  return j.text
+}
+
+export async function deleteClone(name) {
+  const r = await request(`/clone/voices/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  })
+  if (!r.ok) throw new Error(await readError(r))
+  return r.json()
+}
+
+export async function getHealth() {
+  // /health is unauthenticated — used for feature-flag discovery (stt_enabled).
+  const r = await fetch('/health')
+  if (!r.ok) throw new Error(await readError(r))
+  return r.json()
+}
+
 export async function registerClone(name, audioBlob, refText) {
   const form = new FormData()
   form.append('name', name)

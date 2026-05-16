@@ -113,6 +113,40 @@ def test_clone_register_rejects_undecodable_audio(tmp_path, fake_backend):
     assert "decode" in r.json()["detail"].lower() or "ffmpeg" in r.json()["detail"].lower()
 
 
+def test_clone_delete_removes_voice(tmp_path, fake_backend):
+    # Pre-register a voice on disk.
+    voice_dir = tmp_path / "alice"
+    voice_dir.mkdir()
+    (voice_dir / "audio.wav").write_bytes(b"\x00")
+    (voice_dir / "text.txt").write_text("hi there")
+    client = TestClient(_app(tmp_path, fake_backend))
+
+    r = client.delete("/clone/voices/alice")
+    assert r.status_code == 200
+    assert r.json()["status"] == "ok"
+    assert not voice_dir.exists()
+
+
+def test_clone_delete_unknown_returns_404(tmp_path, fake_backend):
+    client = TestClient(_app(tmp_path, fake_backend))
+    r = client.delete("/clone/voices/nobody")
+    assert r.status_code == 404
+
+
+def test_stt_disabled_returns_503(tmp_path, fake_backend):
+    # Default settings have stt_uri unset → /stt should refuse.
+    client = TestClient(_app(tmp_path, fake_backend))
+    wav = _silent_wav_bytes()
+    r = client.post("/stt", files={"audio": ("clip.wav", wav, "audio/wav")})
+    assert r.status_code == 503
+
+
+def test_health_reports_stt_flag(tmp_path, fake_backend):
+    client = TestClient(_app(tmp_path, fake_backend))
+    r = client.get("/health")
+    assert r.json()["stt_enabled"] is False
+
+
 def test_clone_tts_unknown_voice_returns_400(tmp_path, fake_backend):
     client = TestClient(_app(tmp_path, fake_backend))
     r = client.post("/clone/tts", data={"text": "hi", "name": "nobody"})

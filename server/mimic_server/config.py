@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     wyoming_enabled: bool = False
     wyoming_host: str = "0.0.0.0"
     wyoming_port: int = 10200
+    # Optional speech-to-text proxy. When set, /stt is enabled and forwards
+    # audio uploads to a Wyoming ASR server (e.g. wyoming-faster-whisper).
+    # Example: tcp://host.docker.internal:10300
+    stt_uri: str = ""
 
     @computed_field  # type: ignore[prop-decorator]
     @property

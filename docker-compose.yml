@@ -11,6 +11,12 @@ services:
     environment:
       MIMIC_LOG_LEVEL: INFO
       # MIMIC_API_TOKEN: change-me   # uncomment to require bearer auth
+      # Optional: forward /stt to a Wyoming ASR server (e.g. wyoming-faster-
+      # whisper). Requires `extra_hosts` below so the container can reach
+      # services published on the host.
+      # MIMIC_STT_URI: tcp://host.docker.internal:10300
+    # extra_hosts:
+    #   - "host.docker.internal:host-gateway"
     deploy:
       resources:
         reservations:

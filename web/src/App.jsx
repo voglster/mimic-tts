@@ -3,11 +3,14 @@ import {
   AuthError,
   checkAuth,
   clearToken,
+  deleteClone,
+  getHealth,
   getToken,
   listVoices,
   registerClone,
   setToken,
   speak,
+  transcribe,
 } from './api.js'
 import { startRecording } from './recorder.js'
 
@@ -18,6 +21,7 @@ export default function App() {
   const [authed, setAuthed] = useState(false)
   const [voices, setVoices] = useState([])
   const [error, setError] = useState('')
+  const [sttEnabled, setSttEnabled] = useState(false)
 
   const handleError = useCallback((e) => {
     if (e instanceof AuthError) {
@@ -35,6 +39,14 @@ export default function App() {
       handleError(e)
     }
   }, [handleError])
+
+  useEffect(() => {
+    // Pull feature flags from /health (unauth) so the UI knows whether to
+    // show STT bits.
+    getHealth()
+      .then((h) => setSttEnabled(Boolean(h.stt_enabled)))
+      .catch(() => {})
+  }, [])
 
   useEffect(() => {
     if (!getToken()) {
@@ -67,8 +79,17 @@ export default function App() {
 
       {error && <div className="card" style={{ borderColor: 'var(--danger)' }}>{error}</div>}
 
-      <CloneCard onCloned={refreshVoices} onError={handleError} />
-      <SpeakCard voices={voices} onRefresh={refreshVoices} onError={handleError} />
+      <CloneCard onCloned={refreshVoices} onError={handleError} sttEnabled={sttEnabled} />
+      <SpeakCard
+        voices={voices}
+        onRefresh={refreshVoices}
+        onError={handleError}
+      />
+      <ManageClonesCard
+        voices={voices}
+        onChanged={refreshVoices}
+        onError={handleError}
+      />
     </div>
   )
 }
@@ -121,7 +142,7 @@ function TokenGate({ onAuthed }) {
   )
 }
 
-function CloneCard({ onCloned, onError }) {
+function CloneCard({ onCloned, onError, sttEnabled }) {
   const [phrase, setPhrase] = useState(DEFAULT_PHRASE)
   const [name, setName] = useState('')
   const [recording, setRecording] = useState(false)
@@ -129,7 +150,15 @@ function CloneCard({ onCloned, onError }) {
   const [wavBlob, setWavBlob] = useState(null)
   const [status, setStatus] = useState('')
   const [busy, setBusy] = useState(false)
+  const [transcribing, setTranscribing] = useState(false)
   const recRef = useRef(null)
+  const fileRef = useRef(null)
+
+  const setAudio = (blob) => {
+    setWavBlob(blob)
+    if (previewUrl) URL.revokeObjectURL(previewUrl)
+    setPreviewUrl(URL.createObjectURL(blob))
+  }
 
   const toggleRecord = async () => {
     setStatus('')
@@ -137,9 +166,7 @@ function CloneCard({ onCloned, onError }) {
       const blob = await recRef.current.stop()
       recRef.current = null
       setRecording(false)
-      setWavBlob(blob)
-      if (previewUrl) URL.revokeObjectURL(previewUrl)
-      setPreviewUrl(URL.createObjectURL(blob))
+      setAudio(blob)
     } else {
       try {
         recRef.current = await startRecording()
@@ -147,6 +174,32 @@ function CloneCard({ onCloned, onError }) {
       } catch (e) {
         setStatus('Microphone permission denied.')
       }
+    }
+  }
+
+  const onFile = (e) => {
+    const file = e.target.files?.[0]
+    if (file) setAudio(file)
+    e.target.value = ''
+  }
+
+  const doTranscribe = async () => {
+    if (!wavBlob) return
+    setTranscribing(true)
+    setStatus('Transcribing…')
+    try {
+      const text = await transcribe(wavBlob)
+      if (text.trim()) {
+        setPhrase(text.trim())
+        setStatus('Transcribed.')
+      } else {
+        setStatus('Transcript was empty.')
+      }
+    } catch (e) {
+      if (e instanceof AuthError) onError(e)
+      else setStatus(String(e.message || e))
+    } finally {
+      setTranscribing(false)
     }
   }
 
@@ -174,20 +227,46 @@ function CloneCard({ onCloned, onError }) {
     <div className="card">
       <h2>Clone a voice</h2>
       <div className="hint">
-        Read the phrase aloud, name your voice, save it. ~10–20 seconds of clear
-        audio works best.
+        Record yourself reading the phrase, or upload an audio file. ~10–20
+        seconds of clear audio works best.
+        {sttEnabled && ' Hit Transcribe to fill the phrase from your recording.'}
       </div>
 
-      <label>Phrase to read</label>
+      <label>
+        Phrase the recording says{' '}
+        <span style={{ textTransform: 'none', color: 'var(--muted)' }}>
+          (must match the audio)
+        </span>
+      </label>
       <textarea value={phrase} onChange={(e) => setPhrase(e.target.value)} />
 
-      <label>Recording</label>
+      <label>Audio</label>
       <div className="row">
         <button className={recording ? 'danger' : ''} onClick={toggleRecord}>
           {recording ? <><span className="rec-dot" />Stop</> : 'Record'}
         </button>
-        {previewUrl && <audio src={previewUrl} controls />}
+        <button className="secondary" onClick={() => fileRef.current?.click()} disabled={recording}>
+          Upload
+        </button>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="audio/*"
+          style={{ display: 'none' }}
+          onChange={onFile}
+        />
+        {sttEnabled && (
+          <button
+            className="secondary"
+            onClick={doTranscribe}
+            disabled={!wavBlob || transcribing || recording}
+            title="Fill the phrase from the recording"
+          >
+            {transcribing ? '…' : 'Transcribe'}
+          </button>
+        )}
       </div>
+      {previewUrl && <audio src={previewUrl} controls />}
 
       <label>Voice name</label>
       <div className="row">
@@ -271,6 +350,56 @@ function SpeakCard({ voices, onRefresh, onError }) {
       {audioUrl && <audio ref={audioRef} src={audioUrl} controls />}
       <div className={`status ${status && status !== 'Synthesizing…' ? 'error' : ''}`}>{status}</div>
       {voices.length === 0 && <div className="empty">No voices yet — clone one above.</div>}
+    </div>
+  )
+}
+
+function ManageClonesCard({ voices, onChanged, onError }) {
+  const [busyName, setBusyName] = useState('')
+  const [status, setStatus] = useState('')
+  const clones = voices.filter((v) => v.kind === 'clone')
+
+  const onDelete = async (name) => {
+    if (!window.confirm(`Delete cloned voice "${name}"? This can't be undone.`)) return
+    setBusyName(name)
+    setStatus('')
+    try {
+      await deleteClone(name)
+      setStatus(`Deleted "${name}".`)
+      onChanged()
+    } catch (e) {
+      if (e instanceof AuthError) onError(e)
+      else setStatus(String(e.message || e))
+    } finally {
+      setBusyName('')
+    }
+  }
+
+  if (clones.length === 0) return null
+
+  return (
+    <div className="card">
+      <h2>Cloned voices</h2>
+      <div className="hint">Trash a clone you don't want anymore.</div>
+      <ul className="voice-list">
+        {clones.map((v) => (
+          <li key={v.name}>
+            <span>🎙 {v.name}</span>
+            <button
+              className="danger"
+              onClick={() => onDelete(v.name)}
+              disabled={busyName === v.name}
+            >
+              {busyName === v.name ? '…' : 'Delete'}
+            </button>
+          </li>
+        ))}
+      </ul>
+      {status && (
+        <div className={`status ${status.startsWith('Deleted') ? 'ok' : 'error'}`}>
+          {status}
+        </div>
+      )}
     </div>
   )
 }
