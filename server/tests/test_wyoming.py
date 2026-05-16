@@ -15,9 +15,18 @@ from fastapi import HTTPException
 from mimic_server.config import Settings
 from mimic_server.wyoming_server import (
     _build_info,
+    _MimicHandler,
     _route_synth,
     _samples_to_int16_bytes,
     _split_sentences,
+)
+from wyoming.audio import AudioChunk, AudioStart, AudioStop
+from wyoming.tts import (
+    Synthesize,
+    SynthesizeChunk,
+    SynthesizeStart,
+    SynthesizeStop,
+    SynthesizeVoice,
 )
 
 
@@ -135,3 +144,106 @@ def test_split_sentences_does_not_split_on_abbreviations():
 def test_split_sentences_empty_input():
     assert _split_sentences("") == []
     assert _split_sentences("   ") == []
+
+
+def test_build_info_advertises_streaming_support(tmp_path, backend):
+    info = _build_info(backend, _settings(tmp_path))
+    assert info.tts[0].supports_synthesize_streaming is True
+
+
+class _RecordingHandler(_MimicHandler):
+    """Bypass AsyncEventHandler.__init__ (which expects a stream) and
+    capture write_event calls in-memory."""
+
+    def __init__(self, backend, settings, info):
+        self._backend = backend
+        self._settings = settings
+        self._info = info
+        self._stream_voice = None
+        self._stream_buffer = ""
+        self._stream_audio_started = False
+        self._stream_sr = None
+        self._stream_aborted = False
+        self.events = []
+
+    async def write_event(self, event):  # type: ignore[override]
+        self.events.append(event)
+
+
+def _make_handler(tmp_path, backend):
+    settings = _settings(tmp_path)
+    info = _build_info(backend, settings)
+    return _RecordingHandler(backend, settings, info)
+
+
+def _event_types(events):
+    return [e.type for e in events]
+
+
+@pytest.mark.asyncio
+async def test_streaming_session_emits_audio_before_stop(tmp_path, backend):
+    handler = _make_handler(tmp_path, backend)
+
+    await handler.handle_event(
+        SynthesizeStart(voice=SynthesizeVoice(name="default")).event()
+    )
+    # Boundary regex needs ".\s+[A-Z]" all visible — sentence 1 only flushes
+    # once enough of sentence 2 has arrived. Mirror the realistic HA flow:
+    # tokens stream in, boundary becomes visible mid-stream.
+    await handler.handle_event(SynthesizeChunk(text="Hello there, friend. ").event())
+    await handler.handle_event(SynthesizeChunk(text="Goodbye for now my dear.").event())
+
+    types_before_stop = _event_types(handler.events)
+    assert AudioStart.is_type(types_before_stop[0])
+    assert any(AudioChunk.is_type(t) for t in types_before_stop), (
+        "expected AudioChunk events before SynthesizeStop"
+    )
+    assert not any(AudioStop.is_type(t) for t in types_before_stop)
+
+    await handler.handle_event(SynthesizeStop().event())
+
+    types_after_stop = _event_types(handler.events)
+    assert AudioStop.is_type(types_after_stop[-1])
+    # AudioStart should fire exactly once across the whole session.
+    assert sum(1 for t in types_after_stop if AudioStart.is_type(t)) == 1
+
+
+@pytest.mark.asyncio
+async def test_streaming_session_flushes_trailing_partial_on_stop(tmp_path, backend):
+    handler = _make_handler(tmp_path, backend)
+    await handler.handle_event(SynthesizeStart().event())
+    # No terminal punctuation — buffer should hold this until Stop.
+    await handler.handle_event(SynthesizeChunk(text="trailing fragment with no terminator").event())
+    assert backend.synth_builtin.call_count == 0
+    await handler.handle_event(SynthesizeStop().event())
+    # Synthesized once on stop.
+    assert backend.synth_builtin.call_count == 1
+    assert AudioStop.is_type(handler.events[-1].type)
+
+
+@pytest.mark.asyncio
+async def test_streaming_session_handles_split_across_chunks(tmp_path, backend):
+    handler = _make_handler(tmp_path, backend)
+    await handler.handle_event(SynthesizeStart().event())
+    # Sentence boundary lands across two chunks — the period arrives in
+    # chunk 1, but the capitalized continuation arrives in chunk 2.
+    await handler.handle_event(SynthesizeChunk(text="First sentence here.").event())
+    assert backend.synth_builtin.call_count == 0  # no boundary yet (no whitespace+Capital)
+    await handler.handle_event(SynthesizeChunk(text=" Second sentence here.").event())
+    # Boundary now visible — first sentence flushed.
+    assert backend.synth_builtin.call_count == 1
+    await handler.handle_event(SynthesizeStop().event())
+    # Second sentence flushed on Stop.
+    assert backend.synth_builtin.call_count == 2
+
+
+@pytest.mark.asyncio
+async def test_legacy_synthesize_still_works(tmp_path, backend):
+    handler = _make_handler(tmp_path, backend)
+    await handler.handle_event(
+        Synthesize(text="One two three. Four five six seven.", voice=SynthesizeVoice(name="default")).event()
+    )
+    types = _event_types(handler.events)
+    assert AudioStart.is_type(types[0])
+    assert AudioStop.is_type(types[-1])
+    assert backend.synth_builtin.call_count == 2

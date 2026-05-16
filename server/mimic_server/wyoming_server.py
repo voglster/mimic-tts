@@ -21,7 +21,12 @@ from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.error import Error
 from wyoming.info import Attribution, Describe, Info, TtsProgram, TtsVoice
 from wyoming.server import AsyncEventHandler, AsyncServer
-from wyoming.tts import Synthesize
+from wyoming.tts import (
+    Synthesize,
+    SynthesizeChunk,
+    SynthesizeStart,
+    SynthesizeStop,
+)
 
 if TYPE_CHECKING:
     from wyoming.event import Event
@@ -99,7 +104,7 @@ def _build_info(backend: TTSBackend, settings: Settings) -> Info:
                 installed=True,
                 voices=voices,
                 version="1",
-                supports_synthesize_streaming=False,
+                supports_synthesize_streaming=True,
             )
         ]
     )
@@ -154,6 +159,13 @@ class _MimicHandler(AsyncEventHandler):
         self._backend = backend
         self._settings = settings
         self._info = info
+        # Per-connection streaming-input state. Populated on SynthesizeStart,
+        # mutated by SynthesizeChunk, cleared on SynthesizeStop.
+        self._stream_voice: str | None = None
+        self._stream_buffer: str = ""
+        self._stream_audio_started: bool = False
+        self._stream_sr: int | None = None
+        self._stream_aborted: bool = False
 
     async def handle_event(self, event: Event) -> bool:
         if Describe.is_type(event.type):
@@ -164,53 +176,127 @@ class _MimicHandler(AsyncEventHandler):
             await self._stream_synthesis(Synthesize.from_event(event))
             return True
 
+        if SynthesizeStart.is_type(event.type):
+            start = SynthesizeStart.from_event(event)
+            self._stream_voice = start.voice.name if start.voice else None
+            self._stream_buffer = ""
+            self._stream_audio_started = False
+            self._stream_sr = None
+            self._stream_aborted = False
+            return True
+
+        if SynthesizeChunk.is_type(event.type):
+            if self._stream_aborted:
+                return True
+            chunk = SynthesizeChunk.from_event(event)
+            self._stream_buffer += chunk.text
+            await self._flush_complete_sentences()
+            return True
+
+        if SynthesizeStop.is_type(event.type):
+            if not self._stream_aborted:
+                # Flush whatever's left, even if it has no terminal punctuation.
+                tail = self._stream_buffer.strip()
+                self._stream_buffer = ""
+                if tail:
+                    await self._synth_and_emit(tail)
+            if self._stream_audio_started:
+                await self.write_event(AudioStop().event())
+            # Reset for the next session on this connection.
+            self._stream_voice = None
+            self._stream_buffer = ""
+            self._stream_audio_started = False
+            self._stream_sr = None
+            self._stream_aborted = False
+            return True
+
         # Unknown event types — keep connection alive.
         return True
 
-    async def _stream_synthesis(self, synth: Synthesize) -> None:
-        """Generate audio sentence-by-sentence and emit AudioChunks as each
-        sentence finishes. HA can start playing the first sentence while
-        we're still generating the second one — collapses perceived TTFA
-        from total-text time to first-sentence time."""
-        voice_name = synth.voice.name if synth.voice else None
-        sentences = _split_sentences(synth.text)
-        if not sentences:
+    async def _flush_complete_sentences(self) -> None:
+        """Pop any complete sentences from the front of the buffer and emit
+        them. Leaves a trailing partial fragment in the buffer for the next
+        chunk to finish."""
+        while True:
+            match = _SENTENCE_BOUNDARY.search(self._stream_buffer)
+            if not match:
+                return
+            sentence = self._stream_buffer[: match.start()].strip()
+            self._stream_buffer = self._stream_buffer[match.end() :]
+            if not sentence:
+                continue
+            # Honor the same coalesce rule as the batch path: if the sentence
+            # is shorter than _MIN_SENTENCE_CHARS, push it back onto the
+            # buffer so it merges with the next one.
+            if len(sentence) < _MIN_SENTENCE_CHARS:
+                self._stream_buffer = f"{sentence} {self._stream_buffer}"
+                # Bail out — the next boundary (if any) is now past the merged
+                # fragment, but we need more input to be sure. Wait for the
+                # next chunk / stop.
+                return
+            await self._synth_and_emit(sentence)
+            if self._stream_aborted:
+                return
+
+    async def _synth_and_emit(self, sentence: str) -> None:
+        """Synthesize one sentence and emit AudioStart (once) + AudioChunks.
+        Sets _stream_aborted on failure so callers can short-circuit."""
+        try:
+            samples, this_sr = _route_synth(
+                self._backend, self._settings, sentence, self._stream_voice
+            )
+        except HTTPException as e:
+            logger.warning("wyoming synth failed: %s", e.detail)
+            if not self._stream_audio_started:
+                await self.write_event(Error(text=str(e.detail), code="bad-voice").event())
+            self._stream_aborted = True
+            return
+        except Exception as e:
+            logger.exception("wyoming synth crashed")
+            if not self._stream_audio_started:
+                await self.write_event(Error(text=str(e), code="synth-error").event())
+            self._stream_aborted = True
             return
 
-        audio_started = False
-        sr: int | None = None
+        pcm_bytes, this_sr = _samples_to_int16_bytes(samples, this_sr)
+        if not self._stream_audio_started:
+            self._stream_sr = this_sr
+            await self.write_event(AudioStart(rate=this_sr, width=2, channels=1).event())
+            self._stream_audio_started = True
+        sr = self._stream_sr
+        assert sr is not None
         bytes_per_chunk = _CHUNK_SAMPLES * 2  # int16 mono
+        for offset in range(0, len(pcm_bytes), bytes_per_chunk):
+            chunk = pcm_bytes[offset : offset + bytes_per_chunk]
+            await self.write_event(
+                AudioChunk(audio=chunk, rate=sr, width=2, channels=1).event()
+            )
 
+    async def _stream_synthesis(self, synth: Synthesize) -> None:
+        """Legacy one-shot path: full text in a single Synthesize event.
+        Generates audio sentence-by-sentence so the first sentence reaches
+        the wire while later sentences are still being generated."""
+        # Reuse the streaming-state machinery so there's one code path for
+        # emit/error handling. This is a synthetic Start/Stop bracket.
+        self._stream_voice = synth.voice.name if synth.voice else None
+        self._stream_buffer = ""
+        self._stream_audio_started = False
+        self._stream_sr = None
+        self._stream_aborted = False
+
+        sentences = _split_sentences(synth.text)
         for sentence in sentences:
-            try:
-                samples, this_sr = _route_synth(self._backend, self._settings, sentence, voice_name)
-            except HTTPException as e:
-                logger.warning("wyoming synth failed: %s", e.detail)
-                if not audio_started:
-                    await self.write_event(Error(text=str(e.detail), code="bad-voice").event())
-                # If we already started streaming, just stop cleanly so the
-                # client gets the audio we have so far.
+            if self._stream_aborted:
                 break
-            except Exception as e:
-                logger.exception("wyoming synth crashed")
-                if not audio_started:
-                    await self.write_event(Error(text=str(e), code="synth-error").event())
-                break
+            await self._synth_and_emit(sentence)
 
-            pcm_bytes, this_sr = _samples_to_int16_bytes(samples, this_sr)
-            if not audio_started:
-                sr = this_sr
-                await self.write_event(AudioStart(rate=sr, width=2, channels=1).event())
-                audio_started = True
-            assert sr is not None
-            for offset in range(0, len(pcm_bytes), bytes_per_chunk):
-                chunk = pcm_bytes[offset : offset + bytes_per_chunk]
-                await self.write_event(
-                    AudioChunk(audio=chunk, rate=sr, width=2, channels=1).event()
-                )
-
-        if audio_started:
+        if self._stream_audio_started:
             await self.write_event(AudioStop().event())
+
+        self._stream_voice = None
+        self._stream_audio_started = False
+        self._stream_sr = None
+        self._stream_aborted = False
 
 
 async def run_wyoming_server(backend: TTSBackend, settings: Settings) -> None:
