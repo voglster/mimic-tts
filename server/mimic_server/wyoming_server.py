@@ -26,6 +26,7 @@ from wyoming.tts import (
     SynthesizeChunk,
     SynthesizeStart,
     SynthesizeStop,
+    SynthesizeStopped,
 )
 
 if TYPE_CHECKING:
@@ -202,6 +203,11 @@ class _MimicHandler(AsyncEventHandler):
                     await self._synth_and_emit(tail)
             if self._stream_audio_started:
                 await self.write_event(AudioStop().event())
+            # HA's wyoming TTS reader exits its read loop on SynthesizeStopped,
+            # not AudioStop — without this, the HA-side HTTP tts_proxy hangs
+            # waiting for more events until the TCP connection eventually
+            # closes. Emit it unconditionally so HA always sees end-of-session.
+            await self.write_event(SynthesizeStopped().event())
             # Reset for the next session on this connection.
             self._stream_voice = None
             self._stream_buffer = ""
@@ -290,6 +296,9 @@ class _MimicHandler(AsyncEventHandler):
 
         if self._stream_audio_started:
             await self.write_event(AudioStop().event())
+        # See note in SynthesizeStop handler — HA's wyoming TTS waits for
+        # SynthesizeStopped to mark end of session.
+        await self.write_event(SynthesizeStopped().event())
 
         self._stream_voice = None
         self._stream_audio_started = False

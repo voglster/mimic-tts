@@ -26,6 +26,7 @@ from wyoming.tts import (
     SynthesizeChunk,
     SynthesizeStart,
     SynthesizeStop,
+    SynthesizeStopped,
     SynthesizeVoice,
 )
 
@@ -201,7 +202,9 @@ async def test_streaming_session_emits_audio_before_stop(tmp_path, backend):
     await handler.handle_event(SynthesizeStop().event())
 
     types_after_stop = _event_types(handler.events)
-    assert AudioStop.is_type(types_after_stop[-1])
+    # End of session: AudioStop then SynthesizeStopped (HA's reader breaks on the latter).
+    assert SynthesizeStopped.is_type(types_after_stop[-1])
+    assert AudioStop.is_type(types_after_stop[-2])
     # AudioStart should fire exactly once across the whole session.
     assert sum(1 for t in types_after_stop if AudioStart.is_type(t)) == 1
 
@@ -216,7 +219,8 @@ async def test_streaming_session_flushes_trailing_partial_on_stop(tmp_path, back
     await handler.handle_event(SynthesizeStop().event())
     # Synthesized once on stop.
     assert backend.synth_builtin.call_count == 1
-    assert AudioStop.is_type(handler.events[-1].type)
+    assert SynthesizeStopped.is_type(handler.events[-1].type)
+    assert AudioStop.is_type(handler.events[-2].type)
 
 
 @pytest.mark.asyncio
@@ -245,5 +249,7 @@ async def test_legacy_synthesize_still_works(tmp_path, backend):
     )
     types = _event_types(handler.events)
     assert AudioStart.is_type(types[0])
-    assert AudioStop.is_type(types[-1])
+    # End of session: AudioStop then SynthesizeStopped.
+    assert SynthesizeStopped.is_type(types[-1])
+    assert AudioStop.is_type(types[-2])
     assert backend.synth_builtin.call_count == 2
