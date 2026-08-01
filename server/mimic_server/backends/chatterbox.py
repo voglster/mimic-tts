@@ -76,6 +76,21 @@ class ChatterboxBackend:
         )
         self._mm.register(MODEL_KEY, "resemble-ai/chatterbox")
 
+    def _synth(self, **generate_kwargs: Any) -> tuple[Any, int]:
+        """Generate speech, then hand the peak CUDA reserve back to the driver.
+
+        Torch's caching allocator keeps every block it has ever taken, and
+        Chatterbox's high-water mark scales with utterance length. Without this
+        release a single long synthesis pins its peak (~6.6GB observed) for the
+        lifetime of the process, starving other models on the same card.
+        """
+        model = self._mm.get(MODEL_KEY)
+        try:
+            wav = model.generate(**generate_kwargs)
+            return _to_numpy(wav), int(model.sr)
+        finally:
+            _empty_cuda_cache()
+
     # ----- TTSBackend protocol -----
 
     def builtin_voices(self) -> list[dict[str, str]]:
@@ -97,9 +112,7 @@ class ChatterboxBackend:
                     f"Available: [{DEFAULT_VOICE!r}]. Register a clone instead."
                 ),
             )
-        model = self._mm.get(MODEL_KEY)
-        wav = model.generate(text=text)
-        return _to_numpy(wav), int(model.sr)
+        return self._synth(text=text)
 
     def synth_clone(
         self,
@@ -110,9 +123,7 @@ class ChatterboxBackend:
         ref_text: str,  # noqa: ARG002 — Chatterbox is zero-shot; transcript not needed
         language: str = "English",  # noqa: ARG002
     ) -> tuple[Any, int]:
-        model = self._mm.get(MODEL_KEY)
-        wav = model.generate(text=text, audio_prompt_path=str(ref_audio_path))
-        return _to_numpy(wav), int(model.sr)
+        return self._synth(text=text, audio_prompt_path=str(ref_audio_path))
 
     def synth_clone_oneshot(
         self,
@@ -122,13 +133,11 @@ class ChatterboxBackend:
         ref_text: str,  # noqa: ARG002
         language: str = "English",  # noqa: ARG002
     ) -> tuple[Any, int]:
-        model = self._mm.get(MODEL_KEY)
         # Chatterbox wants a path; write bytes to a temp file for the call.
         with tempfile.NamedTemporaryFile(suffix=".wav", delete=True) as tmp:
             tmp.write(ref_audio_bytes)
             tmp.flush()
-            wav = model.generate(text=text, audio_prompt_path=tmp.name)
-        return _to_numpy(wav), int(model.sr)
+            return self._synth(text=text, audio_prompt_path=tmp.name)
 
     def loaded_keys(self) -> list[str]:
         return self._mm.loaded_keys()
