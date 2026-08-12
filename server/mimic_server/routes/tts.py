@@ -11,13 +11,20 @@ from mimic_server.audio import audio_response
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
+    from mimic_server.identity import Caller
     from mimic_server.services import Services
 
 
 def register(app: FastAPI, svc: Services) -> None:
-    @app.post("/tts", dependencies=[svc.auth])
+    # `caller` takes its Depends(...) marker as a real default value, not via
+    # `Annotated[Caller, svc.caller]` — `from __future__ import annotations`
+    # stringifies annotations, and FastAPI resolves those strings against the
+    # module's globals only, never this closure's `svc`. A real default
+    # bypasses that resolution entirely.
+    @app.post("/tts")
     async def tts(
         text: Annotated[str, Form()],
+        caller: Caller = svc.caller,  # noqa: ARG001
         language: Annotated[str, Form()] = "English",
         speaker: Annotated[str, Form()] = "default",
         instruct: Annotated[str, Form()] = "",

@@ -11,6 +11,7 @@ from mimic_server.audio import transcode_to_wav
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
+    from mimic_server.identity import Caller
     from mimic_server.services import Services
 
 
@@ -29,12 +30,15 @@ def register(app: FastAPI, svc: Services) -> None:
             "stt_enabled": bool(settings.stt_uri),
         }
 
-    @app.get("/voices", dependencies=[svc.auth])
-    async def list_voices() -> dict[str, list[dict[str, str]]]:
+    @app.get("/voices")
+    async def list_voices(caller: Caller = svc.caller) -> dict[str, list[dict[str, str]]]:  # noqa: ARG001
         return {"voices": backend.builtin_voices()}
 
-    @app.post("/stt", dependencies=[svc.auth])
-    async def stt(audio: Annotated[UploadFile, File()]) -> dict[str, str]:
+    @app.post("/stt")
+    async def stt(
+        audio: Annotated[UploadFile, File()],
+        caller: Caller = svc.caller,  # noqa: ARG001
+    ) -> dict[str, str]:
         from mimic_server.stt import STTUnavailableError, transcribe
 
         if not settings.stt_uri:

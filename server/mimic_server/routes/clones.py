@@ -12,6 +12,7 @@ if TYPE_CHECKING:
     from fastapi import FastAPI
 
     from mimic_server.config import Settings
+    from mimic_server.identity import Caller
     from mimic_server.services import Services
 
 
@@ -29,15 +30,20 @@ def register(app: FastAPI, svc: Services) -> None:
     settings = svc.settings
     backend = svc.backend
 
-    @app.get("/clone/voices", dependencies=[svc.auth])
-    async def list_clone_voices() -> dict[str, list[str]]:
+    # `caller` takes svc.caller as a real default, not via `Annotated[Caller,
+    # svc.caller]` — `from __future__ import annotations` stringifies
+    # annotations, and FastAPI resolves those strings against this module's
+    # globals only, never this closure's `svc`.
+    @app.get("/clone/voices")
+    async def list_clone_voices(caller: Caller = svc.caller) -> dict[str, list[str]]:  # noqa: ARG001
         on_disk = sorted(p.parent.name for p in settings.reference_dir.glob("*/audio.wav"))
         return {"voices": on_disk}
 
-    @app.post("/clone/register", dependencies=[svc.auth])
+    @app.post("/clone/register")
     async def clone_register(
         ref_audio: Annotated[UploadFile, File()],
         ref_text: Annotated[str, Form()],
+        caller: Caller = svc.caller,  # noqa: ARG001
         name: Annotated[str, Form()] = "default",
     ) -> dict[str, str]:
         audio_bytes = await ref_audio.read()
@@ -48,8 +54,8 @@ def register(app: FastAPI, svc: Services) -> None:
         (ref_dir / "text.txt").write_text(ref_text)
         return {"status": "ok", "name": name}
 
-    @app.delete("/clone/voices/{name}", dependencies=[svc.auth])
-    async def clone_delete(name: str) -> dict[str, str]:
+    @app.delete("/clone/voices/{name}")
+    async def clone_delete(name: str, caller: Caller = svc.caller) -> dict[str, str]:  # noqa: ARG001
         # Block path traversal by rejecting anything that isn't a plain
         # directory name we'd accept on register.
         if "/" in name or "\\" in name or name in {"", ".", ".."}:
@@ -68,9 +74,10 @@ def register(app: FastAPI, svc: Services) -> None:
         shutil.rmtree(ref_dir)
         return {"status": "ok", "name": name}
 
-    @app.post("/clone/tts", dependencies=[svc.auth])
+    @app.post("/clone/tts")
     async def clone_tts(
         text: Annotated[str, Form()],
+        caller: Caller = svc.caller,  # noqa: ARG001
         language: Annotated[str, Form()] = "English",
         name: Annotated[str, Form()] = "default",
         fmt: Annotated[str, Form(alias="format")] = "wav",
@@ -85,11 +92,12 @@ def register(app: FastAPI, svc: Services) -> None:
         )
         return audio_response(samples, sr, fmt=fmt)
 
-    @app.post("/clone/oneshot", dependencies=[svc.auth])
+    @app.post("/clone/oneshot")
     async def clone_oneshot(
         text: Annotated[str, Form()],
         ref_audio: Annotated[UploadFile, File()],
         ref_text: Annotated[str, Form()],
+        caller: Caller = svc.caller,  # noqa: ARG001
         language: Annotated[str, Form()] = "English",
         fmt: Annotated[str, Form(alias="format")] = "wav",
     ):

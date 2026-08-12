@@ -37,7 +37,7 @@ def fake_backend():
 
 
 def _app(tmp_path, fake_backend, *, token=None):
-    settings = Settings(reference_dir=tmp_path, api_token=token)
+    settings = Settings(reference_dir=tmp_path, db_path=tmp_path / "mimic.db", api_token=token)
     return build_app(settings, backend_factory=lambda _s: fake_backend)
 
 
@@ -114,12 +114,16 @@ def test_clone_register_rejects_undecodable_audio(tmp_path, fake_backend):
 
 
 def test_clone_delete_removes_voice(tmp_path, fake_backend):
-    # Pre-register a voice on disk.
+    # Build the app before writing the voice dir: bootstrap() runs at app
+    # construction and adopts any pre-existing flat `reference_dir/<name>/`
+    # as a legacy voice, moving it under the root owner's directory — which
+    # would pull the rug out from under `settings.reference_dir / name`
+    # below before the test even runs its request.
+    client = TestClient(_app(tmp_path, fake_backend))
     voice_dir = tmp_path / "alice"
     voice_dir.mkdir()
     (voice_dir / "audio.wav").write_bytes(b"\x00")
     (voice_dir / "text.txt").write_text("hi there")
-    client = TestClient(_app(tmp_path, fake_backend))
 
     r = client.delete("/clone/voices/alice")
     assert r.status_code == 200
@@ -187,13 +191,14 @@ def test_clone_tts_unknown_voice_returns_400(tmp_path, fake_backend):
 
 
 def test_clone_tts_uses_backend(tmp_path, fake_backend):
-    # Pre-register on disk
+    # See test_clone_delete_removes_voice: build the app before writing the
+    # flat voice dir, or bootstrap()'s legacy-voice adoption moves it first.
+    client = TestClient(_app(tmp_path, fake_backend))
     voice_dir = tmp_path / "alice"
     voice_dir.mkdir()
     (voice_dir / "audio.wav").write_bytes(b"\x00")
     (voice_dir / "text.txt").write_text("hi there")
 
-    client = TestClient(_app(tmp_path, fake_backend))
     r = client.post("/clone/tts", data={"text": "hello", "name": "alice"})
     assert r.status_code == 200
     fake_backend.synth_clone.assert_called_once()
@@ -215,11 +220,13 @@ def test_openai_speech_routes_builtin_voice(tmp_path, fake_backend):
 
 
 def test_openai_speech_routes_clone_voice(tmp_path, fake_backend):
+    # See test_clone_delete_removes_voice: build the app before writing the
+    # flat voice dir, or bootstrap()'s legacy-voice adoption moves it first.
+    client = TestClient(_app(tmp_path, fake_backend))
     voice_dir = tmp_path / "piper"
     voice_dir.mkdir()
     (voice_dir / "audio.wav").write_bytes(b"\x00")
     (voice_dir / "text.txt").write_text("sample")
-    client = TestClient(_app(tmp_path, fake_backend))
     r = client.post(
         "/v1/audio/speech",
         json={"model": "tts-1", "input": "hi", "voice": "piper"},
@@ -278,7 +285,9 @@ def test_openai_speech_requires_auth_when_token_set(tmp_path, fake_backend):
 
 
 def test_public_bind_without_token_refuses_to_start(tmp_path, fake_backend):
-    settings = Settings(reference_dir=tmp_path, host="0.0.0.0", api_token=None)
+    settings = Settings(
+        reference_dir=tmp_path, db_path=tmp_path / "mimic.db", host="0.0.0.0", api_token=None
+    )
     with pytest.raises(RuntimeError, match="MIMIC_API_TOKEN"):
         build_app(settings, backend_factory=lambda _s: fake_backend)
 
@@ -286,6 +295,7 @@ def test_public_bind_without_token_refuses_to_start(tmp_path, fake_backend):
 def test_public_bind_with_explicit_override_starts(tmp_path, fake_backend):
     settings = Settings(
         reference_dir=tmp_path,
+        db_path=tmp_path / "mimic.db",
         host="0.0.0.0",
         api_token=None,
         allow_unauthenticated_public_bind=True,

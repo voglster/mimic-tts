@@ -11,11 +11,13 @@ from typing import TYPE_CHECKING, Any
 from fastapi import Depends, FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from mimic_server.auth import require_token
+from mimic_server.auth import install_error_handler, make_caller_dependency
 from mimic_server.backends import TTSBackend, make_backend
+from mimic_server.bootstrap import bootstrap
 from mimic_server.config import Settings
 from mimic_server.routes import clones, openai, system, tts
 from mimic_server.services import Services
+from mimic_server.usage import UsageTracker
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -97,8 +99,19 @@ def build_app(
 
     _configure_environment(settings)
     backend = (backend_factory or make_backend)(settings)
-    svc = Services(settings=settings, backend=backend, auth=Depends(require_token(settings)))
+    boot = bootstrap(settings)
+    svc = Services(
+        settings=settings,
+        backend=backend,
+        db=boot.db,
+        keys=boot.keys,
+        voices=boot.voices,
+        usage=UsageTracker(boot.db),
+        root=boot.root,
+        caller=Depends(make_caller_dependency(settings, boot.keys, boot.root)),
+    )
     app = FastAPI(title="mimic-tts API", lifespan=_make_lifespan(backend, settings))
+    install_error_handler(app)
     for module in (system, tts, clones, openai):
         module.register(app, svc)
     _mount_web_ui(app)

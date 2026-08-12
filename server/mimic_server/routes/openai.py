@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
     from mimic_server.backends import TTSBackend
     from mimic_server.config import Settings
+    from mimic_server.identity import Caller
     from mimic_server.services import Services
 
 # Audio formats supported by the OpenAI-compatible endpoint. The values are
@@ -73,6 +74,13 @@ def _handle_openai_speech(
 
 
 def register(app: FastAPI, svc: Services) -> None:
-    @app.post("/v1/audio/speech", dependencies=[svc.auth])
-    async def openai_speech(req: _OpenAISpeechRequest) -> Response:
+    # `caller` takes svc.caller as a real default, not via `Annotated[Caller,
+    # svc.caller]` — `from __future__ import annotations` stringifies
+    # annotations, and FastAPI resolves those strings against this module's
+    # globals only, never this closure's `svc`.
+    @app.post("/v1/audio/speech")
+    async def openai_speech(
+        req: _OpenAISpeechRequest,
+        caller: Caller = svc.caller,  # noqa: ARG001
+    ) -> Response:
         return _handle_openai_speech(req, svc.backend, svc.settings)

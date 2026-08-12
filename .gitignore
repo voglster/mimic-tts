@@ -37,5 +37,9 @@ voices/
 # Audio recordings outside the reference dir
 /*.wav
 
+# Dev-mode DB created wherever mimic_server.app is imported with default
+# Settings (e.g. running lint/mypy from the repo root)
+/mimic.db
+
 # Subagent-driven-development scratch (ledgers, briefs, review packages)
 .superpowers/
