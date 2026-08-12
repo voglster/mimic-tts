@@ -1,3 +1,5 @@
+import json
+
 import httpx
 import pytest
 from mimic import Client
@@ -6,6 +8,34 @@ from mimic.errors import MimicAuthError
 
 def _wav_bytes() -> bytes:
     return b"RIFF\x00\x00\x00\x00WAVEfmt " + b"\x00" * 1000
+
+
+def _recording_client(payload: object) -> tuple[Client, list[dict[str, object]]]:
+    """A Client wired to a transport that records every request and always
+    replies with `payload`."""
+    calls: list[dict[str, object]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        body_json = None
+        body_data = None
+        content_type = request.headers.get("content-type", "")
+        if request.content:
+            if content_type.startswith("application/json"):
+                body_json = json.loads(request.content)
+            elif content_type.startswith("application/x-www-form-urlencoded"):
+                body_data = dict(httpx.QueryParams(request.content.decode()))
+        calls.append(
+            {
+                "method": request.method,
+                "url": str(request.url),
+                "json": body_json,
+                "data": body_data,
+            }
+        )
+        return httpx.Response(200, json=payload)
+
+    mt = httpx.MockTransport(handler)
+    return Client(server_url="http://x", transport=mt), calls
 
 
 @pytest.fixture
@@ -172,3 +202,138 @@ def test_context_manager_closes_transport():
     with Client(server_url="http://x", transport=t):
         pass
     assert closed["v"] is True
+
+
+def test_whoami_hits_me():
+    client, calls = _recording_client({"label": "dave", "role": "user"})
+    assert client.whoami()["label"] == "dave"
+    assert calls[-1]["method"] == "GET"
+    assert calls[-1]["url"].endswith("/me")
+
+
+def test_create_key_posts_json_and_returns_the_token():
+    client, calls = _recording_client({"label": "dave", "token": "mk_abc"})
+    result = client.create_key("dave", max_voices=2, daily_char_quota=100)
+    assert result["token"] == "mk_abc"  # noqa: S105
+    assert calls[-1]["json"] == {"label": "dave", "max_voices": 2, "daily_char_quota": 100}
+
+
+def test_create_key_omits_unset_fields():
+    client, calls = _recording_client({"label": "dave", "token": "mk_abc"})
+    client.create_key("dave")
+    assert calls[-1]["json"] == {"label": "dave"}
+
+
+def test_grant_voice_targets_the_qualified_path():
+    client, calls = _recording_client({"status": "ok"})
+    client.grant_voice("jim/piper", "dave")
+    assert calls[-1]["url"].endswith("/clone/voices/jim/piper/grants")
+    assert calls[-1]["json"] == {"grantee": "dave"}
+
+
+def test_revoke_key_passes_purge():
+    client, calls = _recording_client({"status": "ok"})
+    client.revoke_key("dave", purge=True)
+    assert calls[-1]["method"] == "DELETE"
+    assert "purge=true" in calls[-1]["url"]
+
+
+def test_revoke_key_without_purge_omits_the_query_param():
+    client, calls = _recording_client({"status": "ok"})
+    client.revoke_key("dave")
+    assert calls[-1]["method"] == "DELETE"
+    assert "purge" not in calls[-1]["url"]
+
+
+def test_set_visibility_patches():
+    client, calls = _recording_client({"status": "ok", "visibility": "public"})
+    assert client.set_visibility("warm", "public")["visibility"] == "public"
+    assert calls[-1]["method"] == "PATCH"
+    assert calls[-1]["json"] == {"visibility": "public"}
+
+
+def test_revoke_voice_grant_targets_the_qualified_path():
+    client, calls = _recording_client({"status": "ok"})
+    client.revoke_voice_grant("jim/piper", "dave")
+    assert calls[-1]["method"] == "DELETE"
+    assert calls[-1]["url"].endswith("/clone/voices/jim/piper/grants/dave")
+
+
+def test_list_clone_detail_returns_the_detail_array():
+    payload = {
+        "voices": ["dave/warm"],
+        "detail": [
+            {
+                "name": "warm",
+                "qualified": "dave/warm",
+                "owner": "dave",
+                "visibility": "private",
+                "mine": True,
+            }
+        ],
+    }
+    client, _ = _recording_client(payload)
+    assert client.list_clone_detail()[0]["owner"] == "dave"
+
+
+def test_list_clone_detail_tolerates_an_older_server():
+    """A server predating `detail` still answers list_clones(); detail is empty."""
+    client, _ = _recording_client({"voices": ["warm"]})
+    assert client.list_clone_detail() == []
+
+
+def test_list_keys_unwraps_the_keys_array():
+    client, calls = _recording_client({"keys": [{"label": "dave"}]})
+    assert client.list_keys() == [{"label": "dave"}]
+    assert calls[-1]["method"] == "GET"
+    assert calls[-1]["url"].endswith("/admin/keys")
+
+
+def test_update_key_sends_only_the_passed_fields():
+    client, calls = _recording_client({"label": "dave", "enabled": False})
+    client.update_key("dave", enabled=False)
+    assert calls[-1]["method"] == "PATCH"
+    assert calls[-1]["url"].endswith("/admin/keys/dave")
+    assert calls[-1]["json"] == {"enabled": False}
+
+
+def test_admin_usage_builds_the_query_string():
+    client, calls = _recording_client({"totals": [], "events": []})
+    client.admin_usage(key="dave", since="2026-01-01", limit=10)
+    url = calls[-1]["url"]
+    assert calls[-1]["method"] == "GET"
+    assert url.startswith("http://x/admin/usage?")
+    assert "key=dave" in url
+    assert "since=2026-01-01" in url
+    assert "limit=10" in url
+
+
+def test_admin_usage_defaults_limit_to_100():
+    client, calls = _recording_client({"totals": [], "events": []})
+    client.admin_usage()
+    assert "limit=100" in calls[-1]["url"]
+    assert "key=" not in calls[-1]["url"]
+    assert "since=" not in calls[-1]["url"]
+
+
+def test_admin_voices_unwraps_the_voices_array():
+    client, calls = _recording_client({"voices": [{"qualified": "dave/warm"}]})
+    assert client.admin_voices() == [{"qualified": "dave/warm"}]
+    assert calls[-1]["url"].endswith("/admin/voices")
+
+
+def test_create_key_sends_json_body_through_the_transport():
+    """Closes the Task 1 gap: prove `json=` actually reaches httpx via Client,
+    not just that build_request_spec returns it."""
+    seen: dict[str, object] = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["content_type"] = request.headers.get("content-type", "")
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"label": "dave", "token": "mk_abc"})
+
+    mt = httpx.MockTransport(handler)
+    c = Client(server_url="http://x", transport=mt)
+    c.create_key("dave", role="admin")
+    assert seen["content_type"].startswith("application/json")
+    assert seen["body"] == {"label": "dave", "role": "admin"}

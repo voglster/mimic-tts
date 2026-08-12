@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlencode
 
 if TYPE_CHECKING:
     from io import BufferedReader
@@ -83,6 +84,49 @@ class Client:
 
     def list_clones(self) -> list[str]:
         return self._request_json("GET", "/clone/voices")["voices"]
+
+    def list_clone_detail(self) -> list[dict[str, Any]]:
+        return self._request_json("GET", "/clone/voices").get("detail", [])
+
+    def whoami(self) -> dict[str, Any]:
+        return self._request_json("GET", "/me")
+
+    def set_visibility(self, spec: str, visibility: str) -> dict[str, Any]:
+        return self._request_json("PATCH", f"/clone/voices/{spec}", json={"visibility": visibility})
+
+    def grant_voice(self, spec: str, grantee: str) -> dict[str, Any]:
+        return self._request_json("POST", f"/clone/voices/{spec}/grants", json={"grantee": grantee})
+
+    def revoke_voice_grant(self, spec: str, grantee: str) -> dict[str, Any]:
+        return self._request_json("DELETE", f"/clone/voices/{spec}/grants/{grantee}")
+
+    def create_key(self, label: str, **fields: Any) -> dict[str, Any]:
+        body = {"label": label, **{k: v for k, v in fields.items() if v is not None}}
+        return self._request_json("POST", "/admin/keys", json=body)
+
+    def list_keys(self) -> list[dict[str, Any]]:
+        return self._request_json("GET", "/admin/keys")["keys"]
+
+    def update_key(self, label: str, **fields: Any) -> dict[str, Any]:
+        body = {k: v for k, v in fields.items() if v is not None}
+        return self._request_json("PATCH", f"/admin/keys/{label}", json=body)
+
+    def revoke_key(self, label: str, *, purge: bool = False) -> dict[str, Any]:
+        suffix = "?purge=true" if purge else ""
+        return self._request_json("DELETE", f"/admin/keys/{label}{suffix}")
+
+    def admin_usage(
+        self, key: str | None = None, since: str | None = None, limit: int = 100
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {"limit": limit}
+        if key is not None:
+            params["key"] = key
+        if since is not None:
+            params["since"] = since
+        return self._request_json("GET", f"/admin/usage?{urlencode(params)}")
+
+    def admin_voices(self) -> list[dict[str, Any]]:
+        return self._request_json("GET", "/admin/voices")["voices"]
 
     def tts(
         self,
