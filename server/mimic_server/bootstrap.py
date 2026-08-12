@@ -56,15 +56,35 @@ def _adopt_legacy_voices(reference_dir: Path, root: Key, registry: VoiceRegistry
     copy started, so that overlap never causes the destination to be
     clobbered by the original's removal.
     """
-    if not reference_dir.is_dir():
+    if reference_dir.is_dir():
+        for legacy in sorted(reference_dir.iterdir()):
+            if not (legacy / "audio.wav").exists():
+                continue
+            if not VALID_NAME.match(legacy.name):
+                logger.warning("skipping legacy voice dir with unusable name: %s", legacy.name)
+                continue
+            _migrate_legacy_voice(reference_dir, legacy, root, registry)
+
+    _reconcile_owner_dir(reference_dir, root, registry)
+
+
+def _reconcile_owner_dir(reference_dir: Path, root: Key, registry: VoiceRegistry) -> None:
+    """Adopt any voice already sitting under `reference/<root>/` with no DB row.
+
+    Nothing else in the codebase scans the filesystem for voices --
+    `registry.adopt` has exactly one other caller, the migration above. If a
+    prior boot crashed after moving a voice's files into place but before
+    committing its row (or the files were placed there by some other means),
+    the recording would otherwise be permanently invisible to the server
+    despite being safe on disk. `adopt` is an upsert, so re-running this for
+    every voice on every boot is a cheap no-op once it has a row.
+    """
+    owner_dir = reference_dir / root.label
+    if not owner_dir.is_dir():
         return
-    for legacy in sorted(reference_dir.iterdir()):
-        if not (legacy / "audio.wav").exists():
-            continue
-        if not VALID_NAME.match(legacy.name):
-            logger.warning("skipping legacy voice dir with unusable name: %s", legacy.name)
-            continue
-        _migrate_legacy_voice(reference_dir, legacy, root, registry)
+    for voice_dir in sorted(owner_dir.iterdir()):
+        if (voice_dir / "audio.wav").exists() and VALID_NAME.match(voice_dir.name):
+            registry.adopt(root, voice_dir.name)
 
 
 def _migrate_legacy_voice(
@@ -73,8 +93,30 @@ def _migrate_legacy_voice(
     destination = registry.dir_for(root.label, legacy.name)
     original_entries = [p for p in legacy.iterdir() if p != destination]
 
-    if not (destination / "audio.wav").exists():
+    if (destination / "audio.wav").exists():
+        if not _same_audio(legacy, destination):
+            conflict = _quarantine(reference_dir, legacy, legacy.name)
+            logger.error(
+                "legacy voice %r conflicts with existing %s/%s (different audio.wav); "
+                "moved the legacy copy to %s for manual review",
+                legacy.name,
+                root.label,
+                legacy.name,
+                conflict,
+            )
+            return
+        # Already fully migrated with matching content; fall through to clean
+        # up whatever original files a prior, interrupted run left behind.
+    else:
+        if destination.exists():
+            conflict = _quarantine(reference_dir, destination, legacy.name)
+            logger.error(
+                "found an incomplete migration destination for %r; moved it to %s",
+                legacy.name,
+                conflict,
+            )
         _copy_via_staging(reference_dir, legacy, destination)
+
     if not (destination / "audio.wav").exists():
         logger.error("legacy voice %r failed to migrate; leaving it in place", legacy.name)
         return
@@ -88,21 +130,41 @@ def _migrate_legacy_voice(
     logger.info("adopted legacy voice %r as %s/%s", legacy.name, root.label, legacy.name)
 
 
+def _same_audio(legacy: Path, destination: Path) -> bool:
+    return (legacy / "audio.wav").read_bytes() == (destination / "audio.wav").read_bytes()
+
+
+def _quarantine(reference_dir: Path, path: Path, name: str) -> Path:
+    """Move `path` aside instead of destroying it. `.`-prefixed names are
+    already excluded by `VALID_NAME`, the same property the staging dir
+    relies on, so a conflict directory can never be mistaken for a voice."""
+    target = reference_dir / f".conflict-{name}"
+    suffix = 1
+    while target.exists():
+        target = reference_dir / f".conflict-{name}-{suffix}"
+        suffix += 1
+    shutil.move(str(path), str(target))
+    return target
+
+
 def _copy_via_staging(reference_dir: Path, legacy: Path, destination: Path) -> None:
     """Copy `legacy` to `destination` by way of a staging dir next to it.
 
     A plain `copytree(legacy, destination)` breaks when `destination` is
     nested inside `legacy` (the same-name case above): staging never
     overlaps `legacy`, so the copy is always a clean, independent duplicate
-    before anything gets removed.
+    before anything gets removed. Two boots migrating the same legacy name
+    concurrently would clobber each other's staging directory -- harmless
+    (no data loss, since `legacy` itself is untouched until the move
+    succeeds) but worth knowing if migration ever runs from more than one
+    process at a time.
     """
-    if destination.exists() and not (destination / "audio.wav").exists():
-        shutil.rmtree(destination)  # discard a corrupt copy from a prior crash
-    if destination.exists():
-        return
     staging = reference_dir / f".bootstrap-migrate-{legacy.name}"
     if staging.exists():
         shutil.rmtree(staging)  # discard a stale partial copy from a prior crash
-    shutil.copytree(legacy, staging)
-    destination.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(staging), str(destination))
+    try:
+        shutil.copytree(legacy, staging)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(staging), str(destination))
+    finally:
+        shutil.rmtree(staging, ignore_errors=True)
