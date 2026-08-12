@@ -10,15 +10,13 @@ from fastapi import HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
 
-from mimic_server.routes.clones import _resolve_clone
-
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
     from mimic_server.backends import TTSBackend
-    from mimic_server.config import Settings
     from mimic_server.identity import Caller
     from mimic_server.services import Services
+    from mimic_server.voices import VoiceRegistry
 
 # Audio formats supported by the OpenAI-compatible endpoint. The values are
 # (soundfile format, Content-Type). OpenAI also defines mp3/opus/aac, but those
@@ -41,7 +39,7 @@ class _OpenAISpeechRequest(BaseModel):
 
 
 def _handle_openai_speech(
-    req: _OpenAISpeechRequest, backend: TTSBackend, settings: Settings
+    req: _OpenAISpeechRequest, caller: Caller, backend: TTSBackend, voices: VoiceRegistry
 ) -> Response:
     """OpenAI-compatible TTS handler. Routes `voice` to either a built-in or a
     registered clone. Used by HACS `sfortis/openai_tts` and other OpenAI-
@@ -60,9 +58,10 @@ def _handle_openai_speech(
     if req.voice in builtin_names:
         samples, sr = backend.synth_builtin(text=req.input, speaker=req.voice)
     else:
-        ref_path, ref_text = _resolve_clone(settings, req.voice)
+        voice = voices.resolve(caller, req.voice)
+        ref_path, ref_text = voices.reference_paths(voice)
         samples, sr = backend.synth_clone(
-            name=req.voice,
+            name=voice.qualified,
             text=req.input,
             ref_audio_path=ref_path,
             ref_text=ref_text,
@@ -81,6 +80,6 @@ def register(app: FastAPI, svc: Services) -> None:
     @app.post("/v1/audio/speech")
     async def openai_speech(
         req: _OpenAISpeechRequest,
-        caller: Caller = svc.caller,  # noqa: ARG001
+        caller: Caller = svc.caller,
     ) -> Response:
-        return _handle_openai_speech(req, svc.backend, svc.settings)
+        return _handle_openai_speech(req, caller, svc.backend, svc.voices)

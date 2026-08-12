@@ -57,3 +57,14 @@ def install_error_handler(app: FastAPI) -> None:
     async def _handle(_: Request, exc: MimicError) -> JSONResponse:
         headers = _CHALLENGE if exc.status == 401 else None
         return JSONResponse(status_code=exc.status, content=exc.payload(), headers=headers)
+
+    # `validate_name` and `VoiceRegistry.set_visibility` raise plain
+    # `ValueError` rather than a `MimicError` subclass — they're pure
+    # validation, not domain errors tied to a specific HTTP status by
+    # inheritance. Without this handler those requests would 500 instead of
+    # 400.
+    @app.exception_handler(ValueError)
+    async def _handle_value_error(_: Request, exc: ValueError) -> JSONResponse:
+        return JSONResponse(
+            status_code=400, content={"error": "invalid_request", "detail": str(exc)}
+        )
