@@ -113,12 +113,19 @@ def build_app(
         root=boot.root,
         caller=Depends(make_caller_dependency(settings, boot.keys, boot.root)),
     )
-    # An internet-reachable server with auth ON must not publish its schema —
-    # /admin/* would otherwise be fully documented to anyone who hits
-    # /openapi.json, which needs no token (docs routes are unauthenticated by
-    # FastAPI's own design). Dev mode (no token) keeps them on.
+    # A reachable server must not publish its schema — /admin/* would
+    # otherwise be fully documented to anyone who hits /openapi.json, which
+    # needs no token (docs routes are unauthenticated by FastAPI's own
+    # design). Gate on reachability, not just on auth being configured:
+    # MIMIC_ALLOW_UNAUTHENTICATED_PUBLIC_BIND=1 (the containerized default —
+    # see _default_host()) is host=0.0.0.0 with api_token=None, which is
+    # internet-reachable with docs wide open under an auth-only check. Only
+    # the genuinely local, no-token dev case keeps them on.
+    is_loopback = settings.host in {"127.0.0.1", "::1", "localhost"}
     docs_kwargs: dict[str, Any] = (
-        {"docs_url": None, "redoc_url": None, "openapi_url": None} if settings.api_token else {}
+        {}
+        if not settings.api_token and is_loopback
+        else {"docs_url": None, "redoc_url": None, "openapi_url": None}
     )
     app = FastAPI(title="mimic-tts API", lifespan=_make_lifespan(backend, settings), **docs_kwargs)
     install_error_handler(app)

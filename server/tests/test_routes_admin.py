@@ -202,6 +202,33 @@ def test_patch_rejects_negative_quotas(env):
     assert r.status_code == 422
 
 
+def test_patch_rejects_an_unknown_field_instead_of_silently_ignoring_it(env):
+    """extra="ignore" would 200 a request that changed nothing -- worst
+    exactly where it matters (a misspelled key on a root patch looks like it
+    worked). Each of these must 422, not 200 with the row untouched."""
+    client, tokens, _ = env
+    bad_bodies = [
+        {"ENABLED": False},
+        {"Role": "user"},
+        {"managed_by_env": False},
+        {"label": "pwned"},
+        {"token_hash": "whatever"},
+    ]
+    for body in bad_bodies:
+        r = client.patch("/admin/keys/root", headers=_auth(tokens, "root"), json=body)
+        assert r.status_code == 422, body
+
+
+def test_mint_rejects_an_unknown_field(env):
+    client, tokens, _ = env
+    r = client.post(
+        "/admin/keys",
+        headers=_auth(tokens, "root"),
+        json={"label": "frank", "amdin": True},
+    )
+    assert r.status_code == 422
+
+
 def test_usage_limit_is_bounded(env):
     client, tokens, _ = env
     assert (

@@ -6,7 +6,7 @@ import shutil
 from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import Query
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from mimic_server.auth import require_admin
 from mimic_server.errors import Forbidden, InvalidRequest, KeyNotFound
@@ -37,6 +37,13 @@ _NULLABLE_PATCH_FIELDS = frozenset({"expires_at"})
 
 
 class _MintBody(BaseModel):
+    # Pydantic's default extra="ignore" would silently drop a misspelled or
+    # unknown field and still 200 -- worst exactly where it matters, since a
+    # dropped field means the request did nothing but looks like it worked.
+    # "forbid" turns that into a 422, hardening the allowlists below by
+    # construction: an unknown key can no longer reach model_dump() at all.
+    model_config = ConfigDict(extra="forbid")
+
     label: str
     role: str = "user"
     can_upload: bool = True
@@ -47,6 +54,8 @@ class _MintBody(BaseModel):
 
 
 class _PatchBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     enabled: bool | None = None
     can_upload: bool | None = None
     max_voices: int | None = Field(default=None, ge=0)

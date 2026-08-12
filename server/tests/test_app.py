@@ -333,6 +333,29 @@ def test_public_bind_override_resolves_anonymous_callers_to_non_admin(tmp_path, 
     assert client.get("/admin/keys").status_code == 403
 
 
+def test_public_bind_override_disables_docs_too(tmp_path, fake_backend):
+    """Gating docs on settings.api_token alone misses this exact
+    configuration: host=0.0.0.0 (the containerized default whenever
+    MIMIC_DATA_DIR is set), api_token=None. That server is internet-reachable
+    with the whole /admin/* schema on /openapi.json unless the gate also
+    checks reachability, not just whether a token is configured."""
+    settings = Settings(
+        reference_dir=tmp_path,
+        db_path=tmp_path / "mimic.db",
+        host="0.0.0.0",
+        api_token=None,
+        allow_unauthenticated_public_bind=True,
+    )
+    client = TestClient(build_app(settings, backend_factory=lambda _s: fake_backend))
+    for path in ("/openapi.json", "/docs", "/redoc"):
+        assert client.get(path).status_code == 404
+
+
+def test_loopback_dev_mode_still_serves_docs(tmp_path, fake_backend):
+    client = TestClient(_app(tmp_path, fake_backend))
+    assert client.get("/openapi.json").status_code == 200
+
+
 def test_public_bind_override_warns_admin_routes_unavailable(tmp_path, fake_backend, caplog):
     settings = Settings(
         reference_dir=tmp_path,
