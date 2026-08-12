@@ -68,9 +68,10 @@ def _adopt_legacy_voices(reference_dir: Path, root: Key, registry: VoiceRegistry
     3. Reconcile: adopt anything now sitting under `reference/<root>/` that
        has no DB row yet.
 
-    Every step is a rename, so a crash leaves each voice's data at exactly
-    one of: its original spot, staging, or its final destination -- never
-    nowhere. A re-run simply resumes from whichever phase it stopped in.
+    Staging is not namespaced by root label, so a leftover staged voice from
+    a *previous* `MIMIC_ROOT_LABEL` gets installed under the current label
+    on the next boot rather than orphaned under a name nobody points at
+    anymore -- intentional: the data stays owned and visible.
     """
     staging_root = reference_dir / STAGING_DIRNAME
     _evacuate_legacy_voices(reference_dir, staging_root)
@@ -104,13 +105,29 @@ def _evacuate_one(staging_root: Path, legacy: Path) -> None:
     if not payload:
         return  # nothing left to evacuate; only migrated voice subdirs remain
 
+    # audio.wav moves last: while it's still present, `legacy` keeps passing
+    # the `(legacy / "audio.wav").exists()` gate in `_evacuate_legacy_voices`,
+    # so a crash partway through this loop always leaves a source that later
+    # boots still recognize as an unfinished legacy voice and resume. Moving
+    # it first would make any remaining files (transcript, notes, ...)
+    # permanently unreachable, since the gate would never fire again.
+    payload.sort(key=lambda p: p.name == "audio.wav")
+
     destination = staging_root / legacy.name
     destination.mkdir(parents=True, exist_ok=True)
     for entry in payload:
         shutil.move(str(entry), str(destination / entry.name))
 
-    if legacy.exists() and not any(legacy.iterdir()):
+    remaining = list(legacy.iterdir()) if legacy.exists() else []
+    if not remaining:
         legacy.rmdir()
+    else:
+        logger.warning(
+            "legacy dir %s still contains %s after evacuating its flat files; "
+            "verify these are already-migrated voices, not stranded data",
+            legacy,
+            sorted(p.name for p in remaining),
+        )
 
 
 def _install_staged_voices(
@@ -121,11 +138,22 @@ def _install_staged_voices(
     for staged in sorted(staging_root.iterdir()):
         if (staged / "audio.wav").exists():
             _install_one(reference_dir, staged, root, registry)
+        else:
+            logger.warning("staged entry %s has no audio.wav; leaving it for manual review", staged)
     if not any(staging_root.iterdir()):
         staging_root.rmdir()
 
 
 def _install_one(reference_dir: Path, staged: Path, root: Key, registry: VoiceRegistry) -> None:
+    if not VALID_NAME.match(staged.name):
+        conflict = _quarantine(reference_dir, staged, staged.name)
+        logger.warning(
+            "skipping staged voice dir with unusable name %r; moved it to %s",
+            staged.name,
+            conflict,
+        )
+        return
+
     destination = registry.dir_for(root.label, staged.name)
 
     if destination.exists() and not (destination / "audio.wav").exists():
@@ -137,12 +165,25 @@ def _install_one(reference_dir: Path, staged: Path, root: Key, registry: VoiceRe
         )
 
     if destination.exists():
-        if _same_audio(staged, destination):
-            shutil.rmtree(staged)  # identical content already installed; discard the duplicate
+        # Never delete a staged copy just because destination/audio.wav
+        # matches -- text.txt (the reference transcript) or other payload
+        # files can still differ, e.g. a corrected transcript re-recorded
+        # through the flat write path. Always quarantine instead of
+        # deleting; an exact duplicate only costs a little disk.
+        is_duplicate = _same_payload(staged, destination)
+        conflict = _quarantine(reference_dir, staged, staged.name)
+        if is_duplicate:
+            logger.info(
+                "legacy voice %r already installed as %s/%s with identical content; "
+                "moved the redundant copy to %s",
+                staged.name,
+                root.label,
+                staged.name,
+                conflict,
+            )
         else:
-            conflict = _quarantine(reference_dir, staged, staged.name)
             logger.error(
-                "legacy voice %r conflicts with existing %s/%s (different audio.wav); "
+                "legacy voice %r conflicts with existing %s/%s (content differs); "
                 "moved the staged copy to %s for manual review",
                 staged.name,
                 root.label,
@@ -174,8 +215,12 @@ def _reconcile_owner_dir(reference_dir: Path, root: Key, registry: VoiceRegistry
             registry.adopt(root, voice_dir.name)
 
 
-def _same_audio(a: Path, b: Path) -> bool:
-    return (a / "audio.wav").read_bytes() == (b / "audio.wav").read_bytes()
+def _same_payload(a: Path, b: Path) -> bool:
+    a_files = sorted(p.relative_to(a) for p in a.rglob("*") if p.is_file())
+    b_files = sorted(p.relative_to(b) for p in b.rglob("*") if p.is_file())
+    return a_files == b_files and all(
+        (a / rel).read_bytes() == (b / rel).read_bytes() for rel in a_files
+    )
 
 
 def _quarantine(reference_dir: Path, path: Path, name: str) -> Path:

@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import shutil
+from pathlib import Path
+
 import pytest
 from mimic_server.bootstrap import bootstrap
 from mimic_server.config import Settings
@@ -231,6 +234,103 @@ def test_dot_prefixed_dir_produces_no_warning(tmp_path, caplog):
         bootstrap(_settings(tmp_path, api_token="s3cret"))  # noqa: S106
 
     assert caplog.text == ""
+
+
+def test_reappearing_flat_dir_with_corrected_transcript_is_quarantined_not_deleted(
+    tmp_path, caplog
+):
+    """Regression: a duplicate decision based on audio.wav bytes alone
+    deleted the rest of the payload (transcript, notes) whenever a flat
+    voice reappeared with the same audio but a corrected text.txt."""
+    reference = tmp_path / "reference"
+    destination = reference / "root" / "piper"
+    destination.mkdir(parents=True)
+    (destination / "audio.wav").write_bytes(b"RIFF")
+    (destination / "text.txt").write_text("original transcript")
+
+    settings = _settings(tmp_path, api_token="s3cret")  # noqa: S106
+    bootstrap(settings)
+
+    legacy = reference / "piper"
+    legacy.mkdir(parents=True)
+    (legacy / "audio.wav").write_bytes(b"RIFF")  # identical audio bytes
+    (legacy / "text.txt").write_text("CORRECTED TRANSCRIPT")
+    (legacy / "notes.md").write_text("IRREPLACEABLE NOTES")
+
+    with caplog.at_level("INFO"):
+        result = bootstrap(settings)
+
+    assert (destination / "text.txt").read_text() == "original transcript"
+    conflict = reference / ".conflict-piper"
+    assert conflict.is_dir()
+    assert (conflict / "text.txt").read_text() == "CORRECTED TRANSCRIPT"
+    assert (conflict / "notes.md").read_text() == "IRREPLACEABLE NOTES"
+    assert [v.qualified for v in result.voices.all_voices()] == ["root/piper"]
+    assert caplog.text
+
+
+def test_evacuation_moves_audio_last(tmp_path, monkeypatch):
+    """Regression: evacuating payload in raw iterdir() order could move
+    audio.wav before other files. A crash in between would leave the
+    remaining files unreachable forever, since the top-level gate that
+    finds legacy voices only looks for a top-level audio.wav. Forces
+    iterdir() to yield audio.wav first -- the worst case -- so the
+    assertion doesn't depend on incidental filesystem ordering."""
+    reference = tmp_path / "reference"
+    legacy = reference / "piper"
+    legacy.mkdir(parents=True)
+    (legacy / "audio.wav").write_bytes(b"RIFF")
+    (legacy / "text.txt").write_text("t")
+    (legacy / "notes.md").write_text("extra")
+
+    real_iterdir = Path.iterdir
+
+    def audio_first_iterdir(self):
+        entries = list(real_iterdir(self))
+        if self == legacy:
+            entries.sort(key=lambda p: p.name != "audio.wav")
+        return iter(entries)
+
+    monkeypatch.setattr(Path, "iterdir", audio_first_iterdir)
+
+    move_order = []
+    real_move = shutil.move
+
+    def recording_move(src, dst):
+        move_order.append(Path(src).name)
+        return real_move(src, dst)
+
+    monkeypatch.setattr("mimic_server.bootstrap.shutil.move", recording_move)
+
+    bootstrap(_settings(tmp_path, api_token="s3cret"))  # noqa: S106
+
+    evacuation_moves = [n for n in move_order if n in {"audio.wav", "text.txt", "notes.md"}]
+    assert set(evacuation_moves) == {"audio.wav", "text.txt", "notes.md"}
+    assert evacuation_moves[-1] == "audio.wav"
+
+
+def test_resumes_when_only_audio_remains_to_be_evacuated(tmp_path):
+    """Companion to the ordering fix: if a crash happened right before the
+    last (audio.wav) move, the already-staged files and the still-present
+    source must merge cleanly into a fully resolvable voice."""
+    reference = tmp_path / "reference"
+    legacy = reference / "piper"
+    legacy.mkdir(parents=True)
+    (legacy / "audio.wav").write_bytes(b"RIFF")
+
+    staged = reference / ".migrate-staging" / "piper"
+    staged.mkdir(parents=True)
+    (staged / "text.txt").write_text("t")
+    (staged / "notes.md").write_text("extra")
+
+    result = bootstrap(_settings(tmp_path, api_token="s3cret"))  # noqa: S106
+
+    assert [v.qualified for v in result.voices.all_voices()] == ["root/piper"]
+    voice = result.voices.all_voices()[0]
+    wav_path, text = result.voices.reference_paths(voice)
+    assert wav_path.read_bytes() == b"RIFF"
+    assert text == "t"
+    assert (reference / "root" / "piper" / "notes.md").read_text() == "extra"
 
 
 def test_rotating_the_env_token_invalidates_the_old_one(tmp_path):
