@@ -1,3 +1,4 @@
+import re
 from unittest.mock import MagicMock
 
 import pytest
@@ -7,6 +8,14 @@ from mimic.cli import app
 from typer.testing import CliRunner
 
 runner = CliRunner()
+
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _flatten_help(stdout: str) -> str:
+    """Rich colorizes help under GITHUB_ACTIONS and FORCE_COLOR, and wraps it
+    inside a bordered panel, so assert on the text with neither present."""
+    return " ".join(ANSI.sub("", stdout).replace("│", " ").split())
 
 
 @pytest.fixture(autouse=True)
@@ -87,7 +96,7 @@ def test_key_create_help_states_max_voices_zero_blocks_uploads():
     """
     result = runner.invoke(app, ["admin", "key", "create", "--help"])
     assert result.exit_code == 0
-    flattened = " ".join(result.stdout.replace("│", " ").split())
+    flattened = _flatten_help(result.stdout)
     assert "0 = no uploads allowed" in flattened
     max_voices_help = flattened.split("--max-voices")[1].split("--no-upload")[0]
     assert "unlimited" not in max_voices_help
