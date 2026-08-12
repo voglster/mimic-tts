@@ -3,12 +3,13 @@
 from __future__ import annotations
 
 import shutil
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
-from pydantic import BaseModel
+from fastapi import Query
+from pydantic import BaseModel, Field
 
 from mimic_server.auth import require_admin
-from mimic_server.errors import Forbidden, KeyNotFound
+from mimic_server.errors import Forbidden, InvalidRequest, KeyNotFound
 from mimic_server.identity import DEFAULT_DAILY_CHAR_QUOTA, DEFAULT_MAX_VOICES
 
 if TYPE_CHECKING:
@@ -18,14 +19,29 @@ if TYPE_CHECKING:
     from mimic_server.services import Services
 
 _ROOT_KEY_IMMUTABLE = "the root key is managed by MIMIC_API_TOKEN and cannot be modified"
+_VALID_ROLES = frozenset({"user", "admin"})
+
+# Only these survive on a managed_by_env (root) key: it is the unrevokable
+# recovery path if a minted admin key is lost, so the default for any field
+# not named here is "reject", not "allow" -- expires_at, enabled, and role
+# are all safety-relevant and must never reach it through this route.
+_ROOT_PATCHABLE_FIELDS = frozenset({"notes", "max_voices", "daily_char_quota", "can_upload"})
+
+# expires_at is the one field where an explicit JSON null is the legitimate
+# "clear the expiry" request. Every other field maps to a NOT NULL column;
+# an explicit null there is bad input, not a valid update.
+_NULLABLE_PATCH_FIELDS = frozenset({"expires_at"})
+
+# 0 means "unlimited" (see usage.UsageTracker.check_quota's `limit <= 0`
+# check), not "no allowance" -- disable a key with enabled=False instead.
 
 
 class _MintBody(BaseModel):
     label: str
     role: str = "user"
     can_upload: bool = True
-    max_voices: int = DEFAULT_MAX_VOICES
-    daily_char_quota: int = DEFAULT_DAILY_CHAR_QUOTA
+    max_voices: int = Field(default=DEFAULT_MAX_VOICES, ge=0)
+    daily_char_quota: int = Field(default=DEFAULT_DAILY_CHAR_QUOTA, ge=0)
     expires_at: str | None = None
     notes: str = ""
 
@@ -33,8 +49,8 @@ class _MintBody(BaseModel):
 class _PatchBody(BaseModel):
     enabled: bool | None = None
     can_upload: bool | None = None
-    max_voices: int | None = None
-    daily_char_quota: int | None = None
+    max_voices: int | None = Field(default=None, ge=0)
+    daily_char_quota: int | None = Field(default=None, ge=0)
     expires_at: str | None = None
     role: str | None = None
     notes: str | None = None
@@ -65,15 +81,36 @@ def _get_key_or_404(svc: Services, label: str) -> Key:
     return key
 
 
-def _guard_root_mutation(key: Key, *, enabled: bool | None, role: str | None) -> None:
-    """The root key is the recovery path when a minted admin key is lost, so
-    no mutating route may revoke, disable, delete, or demote it — only its
-    non-safety-relevant fields (quotas, notes, expiry) stay editable."""
+def _guard_root_mutation(key: Key, fields: dict[str, Any]) -> None:
+    """The root key is the recovery path when a minted admin key is lost.
+
+    An earlier version of this guard denied specific dangerous fields
+    (enabled, role) and allowed everything else by default -- which meant
+    PATCH /admin/keys/root {"expires_at": "<past>"} slipped through and
+    silently expired the one key with no in-band recovery. An allowlist
+    closes that off for every field, present and future: anything not named
+    in _ROOT_PATCHABLE_FIELDS is refused, full stop.
+    """
     if not key.managed_by_env:
         return
-    demoting = role is not None and role != "admin"
-    if enabled is False or demoting:
+    disallowed = set(fields) - _ROOT_PATCHABLE_FIELDS
+    if disallowed:
         raise Forbidden(_ROOT_KEY_IMMUTABLE)
+
+
+def _validate_role(role: str | None) -> None:
+    if role is not None and role not in _VALID_ROLES:
+        raise InvalidRequest(f"role must be one of {sorted(_VALID_ROLES)}, got {role!r}")
+
+
+def _reject_illegal_nulls(fields: dict[str, Any]) -> None:
+    illegal = sorted(
+        name
+        for name, value in fields.items()
+        if value is None and name not in _NULLABLE_PATCH_FIELDS
+    )
+    if illegal:
+        raise InvalidRequest(f"{illegal} cannot be null")
 
 
 def register(app: FastAPI, svc: Services) -> None:
@@ -100,6 +137,7 @@ def _register_key_routes(app: FastAPI, svc: Services) -> None:
     @app.post("/admin/keys")
     async def admin_mint_key(body: _MintBody, caller: Caller = svc.caller) -> dict[str, Any]:
         require_admin(caller)
+        _validate_role(body.role)
         key, token = svc.keys.create(
             body.label,
             role=body.role,
@@ -117,8 +155,10 @@ def _register_key_routes(app: FastAPI, svc: Services) -> None:
     ) -> dict[str, Any]:
         require_admin(caller)
         key = _get_key_or_404(svc, label)
-        _guard_root_mutation(key, enabled=body.enabled, role=body.role)
         fields = body.model_dump(exclude_unset=True)
+        _reject_illegal_nulls(fields)
+        _validate_role(fields.get("role"))
+        _guard_root_mutation(key, fields)
         updated = svc.keys.update(label, **fields) if fields else key
         return _key_json(updated)
 
@@ -145,7 +185,7 @@ def _register_read_routes(app: FastAPI, svc: Services) -> None:
     async def admin_usage(
         key: str | None = None,
         since: str | None = None,
-        limit: int = 100,
+        limit: Annotated[int, Query(ge=1, le=1000)] = 100,
         caller: Caller = svc.caller,
     ) -> dict[str, Any]:
         require_admin(caller)

@@ -53,7 +53,8 @@ def _check_public_bind_auth(settings: Settings) -> None:
                 "MIMIC_ALLOW_UNAUTHENTICATED_PUBLIC_BIND=1 was set — assuming "
                 "upstream access control is enforced. Anonymous callers resolve "
                 "to a non-admin identity, so /admin/* routes are unavailable "
-                "without a token.",
+                "without a token, and share root's quota (capped at root's "
+                "max_voices/daily_char_quota, with no in-band way to raise it).",
                 settings.host,
             )
         else:
@@ -112,7 +113,14 @@ def build_app(
         root=boot.root,
         caller=Depends(make_caller_dependency(settings, boot.keys, boot.root)),
     )
-    app = FastAPI(title="mimic-tts API", lifespan=_make_lifespan(backend, settings))
+    # An internet-reachable server with auth ON must not publish its schema —
+    # /admin/* would otherwise be fully documented to anyone who hits
+    # /openapi.json, which needs no token (docs routes are unauthenticated by
+    # FastAPI's own design). Dev mode (no token) keeps them on.
+    docs_kwargs: dict[str, Any] = (
+        {"docs_url": None, "redoc_url": None, "openapi_url": None} if settings.api_token else {}
+    )
+    app = FastAPI(title="mimic-tts API", lifespan=_make_lifespan(backend, settings), **docs_kwargs)
     install_error_handler(app)
     for module in (system, tts, clones, openai, admin):
         module.register(app, svc)

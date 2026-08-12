@@ -127,6 +127,101 @@ def test_root_key_cannot_be_demoted_via_patch(env):
     assert client.get("/me", headers=_auth(tokens, "root")).json()["role"] == "admin"
 
 
+def test_root_key_cannot_be_expired_via_patch(env):
+    """The lockout: PATCH root's expires_at into the past used to 200 and
+    then expire the root token on the very next request, leaving no in-band
+    admin route to fix it (every /admin/* route requires the token that just
+    stopped authenticating). The allowlist refuses expires_at on root
+    outright, valid-looking value or not."""
+    client, tokens, _ = env
+    r = client.patch(
+        "/admin/keys/root",
+        headers=_auth(tokens, "root"),
+        json={"expires_at": "2000-01-01T00:00:00"},
+    )
+    assert r.status_code == 403
+    assert client.get("/me", headers=_auth(tokens, "root")).status_code == 200
+    assert client.get("/admin/keys", headers=_auth(tokens, "root")).status_code == 200
+
+
+def test_patch_explicit_null_role_is_400_not_a_silent_demotion(env):
+    """role=None slips past a `role is not None and role != "admin"` demotion
+    check, so an explicit null used to reach the DB and be blocked only by
+    the NOT NULL constraint (an accidental defense, not a designed one)."""
+    client, tokens, _ = env
+    r = client.patch("/admin/keys/dave", headers=_auth(tokens, "root"), json={"role": None})
+    assert r.status_code == 400
+
+
+def test_patch_explicit_null_on_a_non_nullable_field_is_400(env):
+    client, tokens, _ = env
+    for field in ("enabled", "can_upload", "max_voices", "daily_char_quota", "notes"):
+        r = client.patch("/admin/keys/dave", headers=_auth(tokens, "root"), json={field: None})
+        assert r.status_code == 400, field
+
+
+def test_patch_null_expires_at_still_clears_expiry(env):
+    client, tokens, _ = env
+    client.patch(
+        "/admin/keys/dave",
+        headers=_auth(tokens, "root"),
+        json={"expires_at": "2999-01-01T00:00:00"},
+    )
+    r = client.patch("/admin/keys/dave", headers=_auth(tokens, "root"), json={"expires_at": None})
+    assert r.status_code == 200
+    assert r.json()["expires_at"] is None
+
+
+def test_mint_rejects_an_invalid_role(env):
+    client, tokens, _ = env
+    r = client.post(
+        "/admin/keys", headers=_auth(tokens, "root"), json={"label": "frank", "role": "ADMIN"}
+    )
+    assert r.status_code == 400
+
+
+def test_patch_rejects_an_invalid_role(env):
+    client, tokens, _ = env
+    r = client.patch("/admin/keys/dave", headers=_auth(tokens, "root"), json={"role": "wizard"})
+    assert r.status_code == 400
+
+
+def test_mint_rejects_negative_quotas(env):
+    client, tokens, _ = env
+    r = client.post(
+        "/admin/keys", headers=_auth(tokens, "root"), json={"label": "frank", "max_voices": -1}
+    )
+    assert r.status_code == 422
+
+
+def test_patch_rejects_negative_quotas(env):
+    client, tokens, _ = env
+    r = client.patch(
+        "/admin/keys/dave", headers=_auth(tokens, "root"), json={"daily_char_quota": -5}
+    )
+    assert r.status_code == 422
+
+
+def test_usage_limit_is_bounded(env):
+    client, tokens, _ = env
+    assert (
+        client.get("/admin/usage", headers=_auth(tokens, "root"), params={"limit": -1}).status_code
+        == 422
+    )
+    assert (
+        client.get(
+            "/admin/usage", headers=_auth(tokens, "root"), params={"limit": 10000}
+        ).status_code
+        == 422
+    )
+
+
+def test_docs_are_disabled_when_auth_is_required(env):
+    client, _, _ = env
+    for path in ("/openapi.json", "/docs", "/redoc"):
+        assert client.get(path).status_code == 404
+
+
 def test_admin_voices_lists_owner_and_grants(env):
     client, tokens, _ = env
     _register(client, tokens, "dave", "warm")
