@@ -170,6 +170,69 @@ def test_resumes_after_partial_run_leaving_destination_and_source(tmp_path):
     assert (destination / "audio.wav").read_bytes() == b"RIFF"
 
 
+def test_voice_sharing_root_label_does_not_sweep_sibling_voice(tmp_path):
+    """Regression for the sweep bug: when root_label collides with a legacy
+    voice's own name, an already-migrated sibling voice must not get pulled
+    into the collision voice's destination and deleted from its real home."""
+    reference = tmp_path / "reference"
+    for name in ("alice", "jim"):
+        legacy = reference / name
+        legacy.mkdir(parents=True)
+        (legacy / "audio.wav").write_bytes(name.encode() + b"-AUDIO")
+        (legacy / "text.txt").write_text(f"hello from {name}")
+
+    result = bootstrap(_settings(tmp_path, api_token="s3cret", root_label="jim"))  # noqa: S106
+
+    assert sorted(v.qualified for v in result.voices.all_voices()) == ["jim/alice", "jim/jim"]
+    assert (reference / "jim" / "alice" / "audio.wav").read_bytes() == b"alice-AUDIO"
+    assert (reference / "jim" / "jim" / "audio.wav").read_bytes() == b"jim-AUDIO"
+
+
+def test_differing_flat_file_reappearing_does_not_disturb_migrated_owner_dir(tmp_path):
+    """Regression for the owner-dir quarantine bug: once `jim` and `piper`
+    are migrated under reference/jim/, a *new* flat reference/jim/audio.wav
+    with different content (e.g. someone re-recording through the old flat
+    write path) must be quarantined without touching the owner directory or
+    its already-migrated voices."""
+    reference = tmp_path / "reference"
+    for name in ("jim", "piper"):
+        legacy = reference / name
+        legacy.mkdir(parents=True)
+        (legacy / "audio.wav").write_bytes(name.encode() + b"-AUDIO")
+        (legacy / "text.txt").write_text(f"hello from {name}")
+
+    settings = _settings(tmp_path, api_token="s3cret", root_label="jim")  # noqa: S106
+    bootstrap(settings)
+
+    (reference / "jim" / "audio.wav").write_bytes(b"NEW-DIFFERENT-AUDIO")
+    (reference / "jim" / "text.txt").write_text("re-recorded")
+
+    result = bootstrap(settings)
+
+    assert (reference / "jim" / "jim").is_dir()
+    assert (reference / "jim" / "jim" / "audio.wav").read_bytes() == b"jim-AUDIO"
+    assert (reference / "jim" / "piper").is_dir()
+    assert (reference / "jim" / "piper" / "audio.wav").read_bytes() == b"piper-AUDIO"
+    conflict = reference / ".conflict-jim"
+    assert conflict.is_dir()
+    assert (conflict / "audio.wav").read_bytes() == b"NEW-DIFFERENT-AUDIO"
+    for voice in result.voices.all_voices():
+        wav_path, _ = result.voices.reference_paths(voice)
+        assert wav_path.exists()
+
+
+def test_dot_prefixed_dir_produces_no_warning(tmp_path, caplog):
+    reference = tmp_path / "reference"
+    conflict_lookalike = reference / ".conflict-piper"
+    conflict_lookalike.mkdir(parents=True)
+    (conflict_lookalike / "audio.wav").write_bytes(b"RIFF")
+
+    with caplog.at_level("WARNING"):
+        bootstrap(_settings(tmp_path, api_token="s3cret"))  # noqa: S106
+
+    assert caplog.text == ""
+
+
 def test_rotating_the_env_token_invalidates_the_old_one(tmp_path):
     bootstrap(_settings(tmp_path, api_token="old"))  # noqa: S106
     result = bootstrap(_settings(tmp_path, api_token="new"))  # noqa: S106
