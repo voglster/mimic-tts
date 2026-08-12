@@ -90,14 +90,20 @@ def _evacuate_legacy_voices(reference_dir: Path, staging_root: Path) -> None:
         if legacy.name.startswith("."):
             continue
         if not (legacy / "audio.wav").exists():
+            if legacy.is_dir() and any(legacy.iterdir()):
+                logger.warning(
+                    "leaving %s alone: it has no audio.wav, so it is not a voice. Contents: %s",
+                    legacy,
+                    sorted(p.name for p in legacy.iterdir()),
+                )
             continue
         if not VALID_NAME.match(legacy.name):
             logger.warning("skipping legacy voice dir with unusable name: %s", legacy.name)
             continue
-        _evacuate_one(staging_root, legacy)
+        _evacuate_one(reference_dir, staging_root, legacy)
 
 
-def _evacuate_one(staging_root: Path, legacy: Path) -> None:
+def _evacuate_one(reference_dir: Path, staging_root: Path, legacy: Path) -> None:
     """Move `legacy`'s own files to `staging_root/<name>/`, leaving any
     already-migrated voice subdirectories (the same-name/owner-dir overlap
     case) exactly where they are."""
@@ -116,7 +122,23 @@ def _evacuate_one(staging_root: Path, legacy: Path) -> None:
     destination = staging_root / legacy.name
     destination.mkdir(parents=True, exist_ok=True)
     for entry in payload:
-        shutil.move(str(entry), str(destination / entry.name))
+        target = destination / entry.name
+        if target.exists():
+            # A staged file survives here from an interrupted earlier boot.
+            # `shutil.move` onto it would be the one unbacked delete left in
+            # this module, and it is reachable: crash mid-evacuation, operator
+            # restores the flat dir from backup, reboot. Keep both copies --
+            # the staged one is already in the pipeline, so the incoming one
+            # goes aside for a human to compare.
+            kept = _quarantine_colliding_file(reference_dir, entry, legacy.name)
+            logger.warning(
+                "staged file %s already exists from an interrupted migration; "
+                "kept the staged copy and moved the incoming one to %s",
+                target,
+                kept,
+            )
+            continue
+        shutil.move(str(entry), str(target))
 
     remaining = list(legacy.iterdir()) if legacy.exists() else []
     if not remaining:
@@ -222,6 +244,24 @@ def _same_payload(a: Path, b: Path) -> bool:
     return a_files == b_files and all(
         (a / rel).read_bytes() == (b / rel).read_bytes() for rel in a_files
     )
+
+
+def _quarantine_colliding_file(reference_dir: Path, path: Path, voice_name: str) -> Path:
+    """Move a single colliding file aside during evacuation.
+
+    Grouped per voice under its own `-evacuated` directory so it cannot be
+    confused with `_quarantine`'s whole-voice conflict dirs, which use bare
+    and numeric-suffixed names.
+    """
+    holding = reference_dir / f".conflict-{voice_name}-evacuated"
+    holding.mkdir(parents=True, exist_ok=True)
+    target = holding / path.name
+    suffix = 1
+    while target.exists():
+        target = holding / f"{path.name}.{suffix}"
+        suffix += 1
+    shutil.move(str(path), str(target))
+    return target
 
 
 def _quarantine(reference_dir: Path, path: Path, name: str) -> Path:

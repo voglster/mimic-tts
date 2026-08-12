@@ -345,3 +345,42 @@ def test_invalid_root_label_fails_loudly_before_touching_the_filesystem(tmp_path
         bootstrap(_settings(tmp_path, api_token="s3cret", root_label="bad/label"))  # noqa: S106
 
     assert not (tmp_path / "mimic.db").exists()
+
+
+def test_evacuation_never_overwrites_a_staged_file(tmp_path):
+    """Crash mid-evacuation, restore the flat dir from backup, reboot.
+
+    Both transcripts must survive: the staged one is already in the pipeline,
+    the incoming one is what the operator just restored.
+    """
+    reference = tmp_path / "reference"
+    legacy = reference / "piper"
+    legacy.mkdir(parents=True)
+    (legacy / "audio.wav").write_bytes(b"RIFFincoming")
+    (legacy / "text.txt").write_text("INCOMING TRANSCRIPT")
+
+    staged = reference / ".migrate-staging" / "piper"
+    staged.mkdir(parents=True)
+    (staged / "text.txt").write_text("STAGED TRANSCRIPT")
+
+    bootstrap(_settings(tmp_path, api_token="s3cret"))  # noqa: S106
+
+    installed = reference / "root" / "piper"
+    assert installed.joinpath("text.txt").read_text() == "STAGED TRANSCRIPT"
+
+    quarantined = reference / ".conflict-piper-evacuated" / "text.txt"
+    assert quarantined.read_text() == "INCOMING TRANSCRIPT"
+
+
+def test_dir_without_audio_is_left_alone_and_logged(tmp_path, caplog):
+    reference = tmp_path / "reference"
+    orphan = reference / "halfrecorded"
+    orphan.mkdir(parents=True)
+    (orphan / "text.txt").write_text("transcript but no audio")
+
+    with caplog.at_level("WARNING"):
+        result = bootstrap(_settings(tmp_path, api_token="s3cret"))  # noqa: S106
+
+    assert result.voices.all_voices() == []
+    assert (orphan / "text.txt").read_text() == "transcript but no audio"
+    assert "halfrecorded" in caplog.text
