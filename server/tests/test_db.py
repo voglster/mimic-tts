@@ -61,3 +61,50 @@ def test_foreign_keys_enforced(tmp_path):
             "INSERT INTO voices (owner_key_id, name, visibility, created_at) "
             "VALUES (999, 'x', 'private', 'now')"
         )
+
+
+def test_failed_migration_leaves_no_trace(tmp_path, monkeypatch):
+    import sqlite3
+
+    import mimic_server.db as db_module
+    import pytest
+
+    broken_migration = [
+        ["CREATE TABLE probe (id INTEGER PRIMARY KEY)", "NOT VALID SQL"],
+    ]
+    monkeypatch.setattr(db_module, "MIGRATIONS", broken_migration)
+
+    db = db_module.Database(tmp_path / "mimic.db")
+    with pytest.raises(sqlite3.OperationalError):
+        db.migrate()
+
+    with db.cursor() as cur:
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name = 'probe'")
+        assert cur.fetchone() is None
+        cur.execute("SELECT COUNT(*) AS n FROM schema_version")
+        assert cur.fetchone()["n"] == 0
+
+
+def test_migrate_resumes_from_partial_list(tmp_path, monkeypatch):
+    import mimic_server.db as db_module
+
+    path = tmp_path / "mimic.db"
+    first_migration = [["CREATE TABLE first (id INTEGER PRIMARY KEY)"]]
+    monkeypatch.setattr(db_module, "MIGRATIONS", first_migration)
+
+    db = db_module.Database(path)
+    db.migrate()
+    with db.cursor() as cur:
+        cur.execute("SELECT MAX(version) AS version FROM schema_version")
+        assert cur.fetchone()["version"] == 1
+
+    second_migration = [*first_migration, ["CREATE TABLE second (id INTEGER PRIMARY KEY)"]]
+    monkeypatch.setattr(db_module, "MIGRATIONS", second_migration)
+
+    db.migrate()
+    with db.cursor() as cur:
+        cur.execute("SELECT MAX(version) AS version FROM schema_version")
+        assert cur.fetchone()["version"] == 2
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        tables = {row["name"] for row in cur.fetchall()}
+    assert {"first", "second"} <= tables
