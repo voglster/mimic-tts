@@ -1019,11 +1019,11 @@ def test_upload_forbidden_when_can_upload_false(env):
 @pytest.mark.parametrize("bad", ["../evil", "a/b", "", ".", "..", "has space", "x" * 65])
 def test_invalid_names_rejected(env, bad):
     registry, _, dave, _ = env
-    with pytest.raises(VoiceNotFound if "/" in bad else ValueError):
+    with pytest.raises(ValueError):
         registry.register(dave, bad, b"RIFF", "t")
 ```
 
-The last test's expectation deserves a note: a name containing `/` is parsed as a qualified spec on register and rejected as a bad owner, everything else fails name validation. If that split feels muddy when implementing, simplify by making `register` reject any name containing `/` with `ValueError` and change the test's `pytest.raises` to plain `ValueError`.
+`register` takes a plain voice name, never a qualified `owner/name` spec, so `validate_name` rejects every case above uniformly — including any name containing `/`. This is what keeps path traversal out of `dir_for`.
 
 - [ ] **Step 2: Run to verify failure**
 
@@ -2198,7 +2198,9 @@ def register(app: FastAPI, svc: Services) -> None:
     ) -> dict[str, str]:
         wav_bytes = transcode_to_wav(await ref_audio.read())
         voice = svc.voices.register(caller, name, wav_bytes, ref_text)
-        svc.backend.drop_clone(voice.qualified) if hasattr(svc.backend, "drop_clone") else None
+        # A re-registered name must not keep synthesizing from the old audio.
+        with contextlib.suppress(AttributeError, KeyError):
+            svc.backend.drop_clone(voice.qualified)
         return {"status": "ok", "name": voice.qualified}
 
     @app.delete("/clone/voices/{spec:path}")
@@ -2925,4 +2927,3 @@ Spec coverage check, section by section:
 
 The client CLI is deliberately absent — it is Plan 6.
 
-**Known rough edge, decide during Task 5:** the last parametrized case in `test_invalid_names_rejected` splits its expectation on whether the name contains `/`. If that reads as fragile while implementing, make `register` reject any `/` in the name with `ValueError` and simplify the test to expect `ValueError` throughout.

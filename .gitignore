@@ -36,3 +36,6 @@ voices/
 
 # Audio recordings outside the reference dir
 /*.wav
+
+# Subagent-driven-development scratch (ledgers, briefs, review packages)
+.superpowers/
