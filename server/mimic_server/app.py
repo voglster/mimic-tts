@@ -2,114 +2,25 @@
 
 from __future__ import annotations
 
-import io
 import logging
 import os
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Any
+from typing import TYPE_CHECKING, Any
 
-import soundfile as sf
-from fastapi import Depends, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import Response, StreamingResponse
+from fastapi import Depends, FastAPI
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
 
 from mimic_server.auth import require_token
 from mimic_server.backends import TTSBackend, make_backend
 from mimic_server.config import Settings
+from mimic_server.routes import clones, openai, system, tts
+from mimic_server.services import Services
 
 if TYPE_CHECKING:
     from collections.abc import Callable
 
 logger = logging.getLogger(__name__)
-
-
-def _wav_response(
-    samples: Any, sample_rate: int, filename: str = "output.wav"
-) -> StreamingResponse:
-    buf = io.BytesIO()
-    sf.write(buf, samples, sample_rate, format="WAV")
-    buf.seek(0)
-    return StreamingResponse(
-        buf,
-        media_type="audio/wav",
-        headers={"Content-Disposition": f'inline; filename="{filename}"'},
-    )
-
-
-# Output containers we can hand to ffmpeg, keyed by the value clients send in
-# the `format` form field. Value is (ffmpeg muxer, ffmpeg codec args, MIME).
-# Bitrates are speech-tuned — libopus at 24k sounds great for voice and is
-# ~4 KB/sec; libmp3lame at 64k is the universal-compatibility fallback (~8
-# KB/sec) and plays on iOS < 17 too.
-_FFMPEG_FORMATS: dict[str, tuple[str, list[str], str, str]] = {
-    "mp3": ("mp3", ["-c:a", "libmp3lame", "-b:a", "64k"], "audio/mpeg", "mp3"),
-    "opus": ("ogg", ["-c:a", "libopus", "-b:a", "24k"], "audio/ogg", "ogg"),
-    "aac": ("adts", ["-c:a", "aac", "-b:a", "64k"], "audio/aac", "aac"),
-}
-
-
-def _audio_response(
-    samples: Any, sample_rate: int, fmt: str = "wav", filename_stem: str = "output"
-) -> StreamingResponse | Response:
-    """Encode the TTS output as the requested container. `wav` and `flac` go
-    through soundfile; everything else is re-encoded by ffmpeg from a WAV
-    intermediate. Defaults to wav for backwards-compatibility with the CLI
-    and any Wyoming-style consumers."""
-    fmt = fmt.lower()
-    if fmt == "wav":
-        return _wav_response(samples, sample_rate, filename=f"{filename_stem}.wav")
-    if fmt == "flac":
-        buf = io.BytesIO()
-        sf.write(buf, samples, sample_rate, format="FLAC")
-        return Response(
-            content=buf.getvalue(),
-            media_type="audio/flac",
-            headers={"Content-Disposition": f'inline; filename="{filename_stem}.flac"'},
-        )
-    if fmt not in _FFMPEG_FORMATS:
-        raise HTTPException(
-            400,
-            f"unsupported audio format {fmt!r}; supported: wav, flac, {', '.join(_FFMPEG_FORMATS)}",
-        )
-    # Render to WAV first (avoids juggling raw PCM dtype/shape through ffmpeg
-    # stdin) and re-encode. ffmpeg autodetects WAV on stdin.
-    wav_buf = io.BytesIO()
-    sf.write(wav_buf, samples, sample_rate, format="WAV")
-    muxer, codec_args, mime, ext = _FFMPEG_FORMATS[fmt]
-    import subprocess
-
-    try:
-        proc = subprocess.run(
-            [
-                "ffmpeg",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-i",
-                "pipe:0",
-                *codec_args,
-                "-f",
-                muxer,
-                "pipe:1",
-            ],
-            input=wav_buf.getvalue(),
-            capture_output=True,
-            check=True,
-        )
-    except FileNotFoundError as e:
-        raise HTTPException(500, "ffmpeg is not installed on the server") from e
-    except subprocess.CalledProcessError as e:
-        stderr = e.stderr.decode(errors="replace") if e.stderr else ""
-        raise HTTPException(
-            500, f"audio encoding failed: {stderr.strip() or 'ffmpeg failed'}"
-        ) from e
-    return Response(
-        content=proc.stdout,
-        media_type=mime,
-        headers={"Content-Disposition": f'inline; filename="{filename_stem}.{ext}"'},
-    )
 
 
 def _configure_environment(settings: Settings) -> None:
@@ -152,36 +63,6 @@ def _check_public_bind_auth(settings: Settings) -> None:
     )
 
 
-def _resolve_clone(settings: Settings, name: str) -> tuple[Any, str]:
-    """Look up a registered clone's reference audio path and transcript.
-    Raises 400 if not registered."""
-    ref_path = settings.reference_dir / name / "audio.wav"
-    text_path = settings.reference_dir / name / "text.txt"
-    if not (ref_path.exists() and text_path.exists()):
-        raise HTTPException(400, f"no voice '{name}' registered")
-    return ref_path, text_path.read_text()
-
-
-# Audio formats supported by the OpenAI-compatible endpoint. The values are
-# (soundfile format, Content-Type). OpenAI also defines mp3/opus/aac, but those
-# need an external encoder (ffmpeg / lame) we don't ship — request → 400.
-_OPENAI_FORMATS: dict[str, tuple[str, str]] = {
-    "wav": ("WAV", "audio/wav"),
-    "flac": ("FLAC", "audio/flac"),
-    "pcm": ("RAW", "audio/L16"),  # raw 16-bit PCM; OpenAI uses this for low-latency
-}
-
-
-class _OpenAISpeechRequest(BaseModel):
-    """Subset of OpenAI's POST /v1/audio/speech body we honor."""
-
-    model: str = "tts-1"  # ignored — we have one engine
-    input: str
-    voice: str = "default"
-    response_format: str = "wav"  # OpenAI default is mp3; we can't encode mp3 yet
-    speed: float = 1.0  # ignored — Chatterbox has no native speed knob
-
-
 def _make_lifespan(backend: TTSBackend, settings: Settings) -> Any:
     """Build the FastAPI lifespan that supervises backend + optional Wyoming."""
 
@@ -204,85 +85,7 @@ def _make_lifespan(backend: TTSBackend, settings: Settings) -> Any:
     return lifespan
 
 
-def _handle_openai_speech(
-    req: _OpenAISpeechRequest, backend: TTSBackend, settings: Settings
-) -> Response:
-    """OpenAI-compatible TTS handler. Routes `voice` to either a built-in or a
-    registered clone. Used by HACS `sfortis/openai_tts` and other OpenAI-
-    compatible clients (open-webui, etc.)."""
-    fmt = req.response_format.lower()
-    if fmt not in _OPENAI_FORMATS:
-        allowed = ", ".join(_OPENAI_FORMATS)
-        detail = (
-            f"unsupported response_format {req.response_format!r}; "
-            f"supported: {allowed}. (mp3/opus/aac require an encoder we don't ship.)"
-        )
-        raise HTTPException(400, detail)
-    sf_format, content_type = _OPENAI_FORMATS[fmt]
-
-    builtin_names = {v["name"] for v in backend.builtin_voices()}
-    if req.voice in builtin_names:
-        samples, sr = backend.synth_builtin(text=req.input, speaker=req.voice)
-    else:
-        ref_path, ref_text = _resolve_clone(settings, req.voice)
-        samples, sr = backend.synth_clone(
-            name=req.voice,
-            text=req.input,
-            ref_audio_path=ref_path,
-            ref_text=ref_text,
-        )
-
-    buf = io.BytesIO()
-    sf.write(buf, samples, sr, format=sf_format)
-    return Response(content=buf.getvalue(), media_type=content_type)
-
-
-def _transcode_to_wav(data: bytes, sample_rate: int = 24000) -> bytes:
-    """Convert any audio container ffmpeg understands into mono 16-bit WAV at
-    the requested rate. Used to normalize browser uploads (WebM/Opus, MP4/AAC)
-    before we hand the file to a backend that only speaks soundfile-readable
-    formats.
-
-    WAV input is also accepted (idempotent re-mux), so the CLI client doesn't
-    need to know which path it's on. Default rate is 24 kHz (TTS reference);
-    pass 16000 for whisper/STT.
-    """
-    import subprocess
-
-    try:
-        proc = subprocess.run(
-            [
-                "ffmpeg",
-                "-hide_banner",
-                "-loglevel",
-                "error",
-                "-i",
-                "pipe:0",
-                "-ac",
-                "1",
-                "-ar",
-                str(sample_rate),
-                "-c:a",
-                "pcm_s16le",
-                "-f",
-                "wav",
-                "pipe:1",
-            ],
-            input=data,
-            capture_output=True,
-            check=True,
-        )
-    except FileNotFoundError as e:
-        raise HTTPException(500, "ffmpeg is not installed on the server") from e
-    except subprocess.CalledProcessError as e:
-        stderr = e.stderr.decode(errors="replace") if e.stderr else ""
-        raise HTTPException(
-            400, f"could not decode uploaded audio: {stderr.strip() or 'ffmpeg failed'}"
-        ) from e
-    return proc.stdout
-
-
-def build_app(  # noqa: C901 — flat route registration; complexity is incidental
+def build_app(
     settings: Settings,
     backend_factory: Callable[[Settings], TTSBackend] | None = None,
 ) -> FastAPI:
@@ -293,138 +96,11 @@ def build_app(  # noqa: C901 — flat route registration; complexity is incident
     """
 
     _configure_environment(settings)
-
     backend = (backend_factory or make_backend)(settings)
-    auth = Depends(require_token(settings))
+    svc = Services(settings=settings, backend=backend, auth=Depends(require_token(settings)))
     app = FastAPI(title="mimic-tts API", lifespan=_make_lifespan(backend, settings))
-
-    @app.get("/health")
-    async def health() -> dict[str, Any]:
-        on_disk = sorted(p.parent.name for p in settings.reference_dir.glob("*/audio.wav"))
-        return {
-            "status": "ok",
-            "backend": settings.backend,
-            "models_loaded": backend.loaded_keys(),
-            "registered_voices": on_disk,
-            "stt_enabled": bool(settings.stt_uri),
-        }
-
-    @app.get("/voices", dependencies=[auth])
-    async def list_voices() -> dict[str, list[dict[str, str]]]:
-        return {"voices": backend.builtin_voices()}
-
-    @app.get("/clone/voices", dependencies=[auth])
-    async def list_clone_voices() -> dict[str, list[str]]:
-        on_disk = sorted(p.parent.name for p in settings.reference_dir.glob("*/audio.wav"))
-        return {"voices": on_disk}
-
-    @app.post("/tts", dependencies=[auth])
-    async def tts(
-        text: Annotated[str, Form()],
-        language: Annotated[str, Form()] = "English",
-        speaker: Annotated[str, Form()] = "default",
-        instruct: Annotated[str, Form()] = "",
-        fmt: Annotated[str, Form(alias="format")] = "wav",
-    ):
-        samples, sr = backend.synth_builtin(
-            text=text,
-            speaker=speaker,
-            language=language,
-            instruct=instruct or None,
-        )
-        return _audio_response(samples, sr, fmt=fmt)
-
-    @app.post("/clone/register", dependencies=[auth])
-    async def clone_register(
-        ref_audio: Annotated[UploadFile, File()],
-        ref_text: Annotated[str, Form()],
-        name: Annotated[str, Form()] = "default",
-    ) -> dict[str, str]:
-        audio_bytes = await ref_audio.read()
-        wav_bytes = _transcode_to_wav(audio_bytes)
-        ref_dir = settings.reference_dir / name
-        ref_dir.mkdir(parents=True, exist_ok=True)
-        (ref_dir / "audio.wav").write_bytes(wav_bytes)
-        (ref_dir / "text.txt").write_text(ref_text)
-        return {"status": "ok", "name": name}
-
-    @app.delete("/clone/voices/{name}", dependencies=[auth])
-    async def clone_delete(name: str) -> dict[str, str]:
-        # Block path traversal by rejecting anything that isn't a plain
-        # directory name we'd accept on register.
-        if "/" in name or "\\" in name or name in {"", ".", ".."}:
-            raise HTTPException(400, f"invalid voice name {name!r}")
-        ref_dir = settings.reference_dir / name
-        if not ref_dir.is_dir():
-            raise HTTPException(404, f"no voice {name!r} registered")
-        # Drop the loaded model first if the backend has it cached, so the
-        # next synth for a re-registered same-name doesn't reuse stale audio.
-        try:
-            backend.drop_clone(name)  # type: ignore[attr-defined]
-        except (AttributeError, KeyError):
-            pass
-        import shutil
-
-        shutil.rmtree(ref_dir)
-        return {"status": "ok", "name": name}
-
-    @app.post("/stt", dependencies=[auth])
-    async def stt(audio: Annotated[UploadFile, File()]) -> dict[str, str]:
-        from mimic_server.stt import STTUnavailableError, transcribe
-
-        if not settings.stt_uri:
-            raise HTTPException(503, "STT is not configured (set MIMIC_STT_URI)")
-        audio_bytes = await audio.read()
-        wav_bytes = _transcode_to_wav(audio_bytes, sample_rate=16000)
-        try:
-            text = await transcribe(wav_bytes, settings.stt_uri)
-        except STTUnavailableError as e:
-            raise HTTPException(503, str(e)) from e
-        except OSError as e:
-            raise HTTPException(
-                502, f"could not reach STT server at {settings.stt_uri}: {e}"
-            ) from e
-        return {"text": text}
-
-    @app.post("/clone/tts", dependencies=[auth])
-    async def clone_tts(
-        text: Annotated[str, Form()],
-        language: Annotated[str, Form()] = "English",
-        name: Annotated[str, Form()] = "default",
-        fmt: Annotated[str, Form(alias="format")] = "wav",
-    ):
-        ref_path, ref_text = _resolve_clone(settings, name)
-        samples, sr = backend.synth_clone(
-            name=name,
-            text=text,
-            ref_audio_path=ref_path,
-            ref_text=ref_text,
-            language=language,
-        )
-        return _audio_response(samples, sr, fmt=fmt)
-
-    @app.post("/v1/audio/speech", dependencies=[auth])
-    async def openai_speech(req: _OpenAISpeechRequest) -> Response:
-        return _handle_openai_speech(req, backend, settings)
-
-    @app.post("/clone/oneshot", dependencies=[auth])
-    async def clone_oneshot(
-        text: Annotated[str, Form()],
-        ref_audio: Annotated[UploadFile, File()],
-        ref_text: Annotated[str, Form()],
-        language: Annotated[str, Form()] = "English",
-        fmt: Annotated[str, Form(alias="format")] = "wav",
-    ):
-        audio_bytes = await ref_audio.read()
-        wav_bytes = _transcode_to_wav(audio_bytes)
-        samples, sr = backend.synth_clone_oneshot(
-            text=text,
-            ref_audio_bytes=wav_bytes,
-            ref_text=ref_text,
-            language=language,
-        )
-        return _audio_response(samples, sr, fmt=fmt)
-
+    for module in (system, tts, clones, openai):
+        module.register(app, svc)
     _mount_web_ui(app)
     return app
 
