@@ -52,7 +52,9 @@ def _check_public_bind_auth(settings: Settings) -> None:
                 "upstream access control is enforced. Anonymous callers resolve "
                 "to a non-admin identity, so /admin/* routes are unavailable "
                 "without a token, and share root's quota (capped at root's "
-                "max_voices/daily_char_quota, with no in-band way to raise it).",
+                "max_voices/daily_char_quota, with no in-band way to raise it). "
+                "They also share root's key id, so they own root's voices and "
+                "can delete or publish them.",
                 settings.host,
             )
         else:

@@ -133,11 +133,16 @@ GET    /me                      the caller's own identity, role, quota, usage to
 Every minted key gets, unless overridden at mint time: `can_upload=true`,
 `max_voices=5`, `daily_char_quota=50000`, no expiry. Quota is enforced
 pre-flight on every synthesis call (character count) and on register
-(voice count); admin-role keys are exempt from both. The root key is
-special-cased against a handful of fields (`enabled`, `role`, `expires_at`)
-that would otherwise let someone lock themselves out with no in-band
-recovery path — it stays admin, enabled, and non-expiring no matter what a
-`PATCH` sends.
+(voice count); admin-role keys are exempt from both.
+
+The root key — the one seeded from `MIMIC_API_TOKEN` — is protected by an
+allowlist rather than a list of forbidden fields: a `PATCH` may change only
+`notes`, `max_voices`, `daily_char_quota`, and `can_upload`. Anything else,
+including any future field, is refused with a 403. It cannot be revoked,
+purged, disabled, demoted, or given an expiry. That is deliberate: it is the
+recovery path if a minted admin key is lost, and every one of those
+operations would otherwise lock the owner out of the very endpoints they
+would need to fix it, with no in-band way back.
 
 ### Visibility and grants
 
@@ -200,17 +205,45 @@ warning). A `MIMIC_WYOMING_KEY` that names a key which doesn't actually
 exist **does** log a warning and falls back to root. All Wyoming requests
 are synthesized and quota-tracked under that one key's permissions.
 
+That identity is resolved **once, at startup**. Revoking, disabling, or
+expiring the key named by `MIMIC_WYOMING_KEY` therefore has no effect on
+Wyoming until the server restarts, and neither do quota changes to it.
+Voice *grants* are checked per request and do take effect immediately — it
+is the key's own state that is snapshotted. Restart the server after
+revoking a key you had pointed Wyoming at.
+
 ## Upgrading from single-token
 
 Deployments already running the single-shared-token version of this server
 upgrade in place — no separate migration step to run by hand — but the
-first boot on this version changes things on disk, so **back up your data
-volume before starting the new image**:
+first boot on this version **moves your voice files on disk**, so back up
+the data volume first. Stop the container before you do: tarring a live
+SQLite file gives you a snapshot nobody promised to be consistent.
 
 ```bash
-docker run --rm -v mimic-data:/data -v "$PWD":/backup alpine \
+docker compose down
+
+# Compose prefixes volume names with the project directory, so the volume
+# declared as `mimic-data` is really `mimic-tts_mimic-data`. Confirm yours:
+docker volume ls | grep mimic
+
+docker run --rm -v mimic-tts_mimic-data:/data -v "$PWD":/backup alpine \
   tar czf /backup/mimic-data-backup.tar.gz -C /data .
+
+# Verify the backup is real before you trust it. A wrong volume name does
+# NOT error — it creates a new empty volume and tars up nothing.
+tar tzf mimic-data-backup.tar.gz | grep reference/
+ls -lh mimic-data-backup.tar.gz
 ```
+
+That verification step is not ceremony. If the volume name is wrong you get
+a valid, tiny, empty tarball and no warning, and you will not find out until
+you need it.
+
+**Rolling back is not transparent.** After migration the reference audio
+lives at `reference/<root-label>/<name>/`, and older images read only the
+flat `reference/<name>/` layout — they will list zero clones. Downgrading
+means restoring the backup, which is the whole reason to take one.
 
 On first boot:
 
@@ -237,6 +270,24 @@ deleted, but nothing was silently guessed either:
   whose adopted destination already existed with *different* content
   (different `audio.wav` or `text.txt`). Both copies are kept; compare them
   and decide by hand which one to keep as `reference/<root-label>/<name>/`.
+
+There is a third kind of leftover, and it is not dot-prefixed: a plain
+directory still sitting at `reference/<name>/` after a clean boot. That
+means it had a `text.txt` but no `audio.wav`, so it was not recognized as a
+voice and was left untouched. The server logs a warning naming it. Either
+supply the missing `audio.wav` and reboot, or re-record the voice.
+
+**Do not change `MIMIC_ROOT_LABEL` after the first boot.** The root key is
+looked up by label, so a new label mints a *second* admin key carrying the
+same token hash, and which one authenticates is left to whichever row SQLite
+returns first. Voices adopted under the old label stay there, owned by the
+old key. If you want a different root label, set it before the first boot on
+this version.
+
+One visible API change: `GET /clone/voices` now returns **qualified** names
+(`root/jim`, not `jim`). Bare names still resolve for their owner, so
+`mimic clone say jim` keeps working — but anything parsing that list sees
+the qualified form.
 
 ## Wyoming protocol (Home Assistant voice pipeline)
 

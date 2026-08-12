@@ -94,7 +94,7 @@ def test_clones_lists_registered(runner):
 
 def test_health(runner):
     fake = MagicMock()
-    fake.health.return_value = {"status": "ok", "models_loaded": ["clone"], "registered_voices": []}
+    fake.health.return_value = {"status": "ok", "backend": "chatterbox", "stt_enabled": False}
     fake.__enter__ = MagicMock(return_value=fake)
     fake.__exit__ = MagicMock(return_value=None)
     with patch("mimic.cli.Client", return_value=fake):

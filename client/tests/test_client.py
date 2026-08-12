@@ -55,7 +55,7 @@ def test_health(transport):
     mt, routes = transport
     routes[("GET", "/health")] = httpx.Response(
         200,
-        json={"status": "ok", "models_loaded": [], "registered_voices": []},
+        json={"status": "ok", "backend": "chatterbox", "stt_enabled": False},
     )
     c = Client(server_url="http://x", transport=mt)
     assert c.health()["status"] == "ok"

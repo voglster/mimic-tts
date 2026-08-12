@@ -160,7 +160,7 @@ def clones(mine: Annotated[bool, typer.Option(help="Only voices you own.")] = Fa
 
 @app.command()
 def health() -> None:
-    """Show server health and currently loaded models."""
+    """Show server status and backend. (Loaded models moved to `mimic whoami`.)"""
     with _client() as c:
         info = _run(c.health)
     typer.echo(info)
