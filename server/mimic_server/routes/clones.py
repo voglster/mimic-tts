@@ -9,6 +9,7 @@ from fastapi import File, Form, UploadFile
 from pydantic import BaseModel
 
 from mimic_server.audio import audio_response, transcode_to_wav
+from mimic_server.synth import synthesize
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -102,14 +103,8 @@ def register(app: FastAPI, svc: Services) -> None:
         name: Annotated[str, Form()] = "default",
         fmt: Annotated[str, Form(alias="format")] = "wav",
     ):
-        voice = voices.resolve(caller, name)
-        ref_path, ref_text = voices.reference_paths(voice)
-        samples, sr = backend.synth_clone(
-            name=voice.qualified,
-            text=text,
-            ref_audio_path=ref_path,
-            ref_text=ref_text,
-            language=language,
+        samples, sr = synthesize(
+            svc, caller, endpoint="/clone/tts", text=text, voice_spec=name, language=language
         )
         return audio_response(samples, sr, fmt=fmt)
 
@@ -118,15 +113,22 @@ def register(app: FastAPI, svc: Services) -> None:
         text: Annotated[str, Form()],
         ref_audio: Annotated[UploadFile, File()],
         ref_text: Annotated[str, Form()],
-        caller: Caller = svc.caller,  # noqa: ARG001
+        caller: Caller = svc.caller,
         language: Annotated[str, Form()] = "English",
         fmt: Annotated[str, Form(alias="format")] = "wav",
     ):
+        svc.usage.check_quota(caller, len(text))
         wav_bytes = transcode_to_wav(await ref_audio.read())
         samples, sr = backend.synth_clone_oneshot(
             text=text,
             ref_audio_bytes=wav_bytes,
             ref_text=ref_text,
             language=language,
+        )
+        svc.usage.record(
+            caller.id,
+            "/clone/oneshot",
+            len(text),
+            audio_seconds=len(samples) / sr if sr else 0.0,
         )
         return audio_response(samples, sr, fmt=fmt)

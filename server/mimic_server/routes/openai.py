@@ -10,13 +10,13 @@ from fastapi import HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
 
+from mimic_server.synth import synthesize
+
 if TYPE_CHECKING:
     from fastapi import FastAPI
 
-    from mimic_server.backends import TTSBackend
     from mimic_server.identity import Caller
     from mimic_server.services import Services
-    from mimic_server.voices import VoiceRegistry
 
 # Audio formats supported by the OpenAI-compatible endpoint. The values are
 # (soundfile format, Content-Type). OpenAI also defines mp3/opus/aac, but those
@@ -38,12 +38,10 @@ class _OpenAISpeechRequest(BaseModel):
     speed: float = 1.0  # ignored — Chatterbox has no native speed knob
 
 
-def _handle_openai_speech(
-    req: _OpenAISpeechRequest, caller: Caller, backend: TTSBackend, voices: VoiceRegistry
-) -> Response:
+def _handle_openai_speech(req: _OpenAISpeechRequest, caller: Caller, svc: Services) -> Response:
     """OpenAI-compatible TTS handler. Routes `voice` to either a built-in or a
-    registered clone. Used by HACS `sfortis/openai_tts` and other OpenAI-
-    compatible clients (open-webui, etc.)."""
+    registered clone via the shared `synthesize()` choke point. Used by HACS
+    `sfortis/openai_tts` and other OpenAI-compatible clients (open-webui, etc.)."""
     fmt = req.response_format.lower()
     if fmt not in _OPENAI_FORMATS:
         allowed = ", ".join(_OPENAI_FORMATS)
@@ -54,18 +52,9 @@ def _handle_openai_speech(
         raise HTTPException(400, detail)
     sf_format, content_type = _OPENAI_FORMATS[fmt]
 
-    builtin_names = {v["name"] for v in backend.builtin_voices()}
-    if req.voice in builtin_names:
-        samples, sr = backend.synth_builtin(text=req.input, speaker=req.voice)
-    else:
-        voice = voices.resolve(caller, req.voice)
-        ref_path, ref_text = voices.reference_paths(voice)
-        samples, sr = backend.synth_clone(
-            name=voice.qualified,
-            text=req.input,
-            ref_audio_path=ref_path,
-            ref_text=ref_text,
-        )
+    samples, sr = synthesize(
+        svc, caller, endpoint="/v1/audio/speech", text=req.input, voice_spec=req.voice
+    )
 
     buf = io.BytesIO()
     sf.write(buf, samples, sr, format=sf_format)
@@ -82,4 +71,4 @@ def register(app: FastAPI, svc: Services) -> None:
         req: _OpenAISpeechRequest,
         caller: Caller = svc.caller,
     ) -> Response:
-        return _handle_openai_speech(req, caller, svc.backend, svc.voices)
+        return _handle_openai_speech(req, caller, svc)

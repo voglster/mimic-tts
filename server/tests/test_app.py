@@ -72,15 +72,24 @@ def test_tts_endpoint_returns_wav(tmp_path, fake_backend):
     assert r.headers["content-type"] == "audio/wav"
 
 
-def test_tts_unsupported_speaker_returns_400(tmp_path, fake_backend):
+def test_tts_unsupported_builtin_speaker_returns_400(tmp_path, fake_backend):
     """Backends surface unsupported built-in speakers as HTTP 400."""
     fake_backend.synth_builtin.side_effect = HTTPException(
-        status_code=400, detail="No built-in voice 'jim'."
+        status_code=400, detail="No built-in voice 'default'."
     )
     client = TestClient(_app(tmp_path, fake_backend))
-    r = client.post("/tts", data={"text": "hi", "speaker": "jim"})
+    r = client.post("/tts", data={"text": "hi", "speaker": "default"})
     assert r.status_code == 400
-    assert "jim" in r.json()["detail"]
+    assert "default" in r.json()["detail"]
+
+
+def test_tts_unknown_speaker_that_is_not_a_voice_returns_404(tmp_path, fake_backend):
+    """`/tts` now resolves non-built-in speakers as clone voices via the shared
+    `synthesize()` choke point, so an unrecognized name is a 404, not a
+    backend-level 400."""
+    client = TestClient(_app(tmp_path, fake_backend))
+    r = client.post("/tts", data={"text": "hi", "speaker": "jim"})
+    assert r.status_code == 404
 
 
 def test_clone_register_writes_files_and_lists_voice(tmp_path, fake_backend):
