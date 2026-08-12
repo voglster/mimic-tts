@@ -56,3 +56,13 @@ class LabelInUse(MimicError):  # noqa: N818
 class QuotaExceeded(MimicError):  # noqa: N818
     status = 429
     code = "quota_exceeded"
+
+
+class InvalidRequest(MimicError):  # noqa: N818
+    status = 400
+    code = "invalid_request"
+
+
+class ReservedName(MimicError):  # noqa: N818
+    status = 400
+    code = "reserved_name"

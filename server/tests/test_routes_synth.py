@@ -130,3 +130,71 @@ def test_oneshot_counts_against_quota(env):
         files={"ref_audio": ("a.wav", _wav(), "audio/wav")},
     )
     assert r.status_code == 429
+
+
+def test_clone_tts_prefers_a_same_named_clone_over_a_builtin(env, fake_backend, tmp_path):
+    """A voice named "default" must be reachable on /clone/tts even though
+    "default" is also a built-in voice name — /clone/tts is the clone
+    endpoint, so the registry must win there. `/clone/register` now refuses
+    to create new voices with that name (see the dedicated 400 test below),
+    so this simulates a pre-existing (e.g. bootstrap-adopted) voice by
+    registering directly through `VoiceRegistry`, bypassing the HTTP route.
+    `tmp_path` is the same directory `env` built its `Settings` from —
+    pytest hands out one `tmp_path` per test, shared across all fixtures a
+    given test requests."""
+    client, tokens, keys = env
+    from mimic_server.identity import Caller
+    from mimic_server.voices import VoiceRegistry
+
+    voices = VoiceRegistry(keys.db, keys, tmp_path / "reference")
+    voices.register(Caller(key=keys.get_by_label("dave")), "default", _wav(), "hello")
+
+    r = client.post(
+        "/clone/tts", headers=_auth(tokens, "dave"), data={"text": "hi", "name": "default"}
+    )
+    assert r.status_code == 200
+    fake_backend.synth_clone.assert_called_once()
+    fake_backend.synth_builtin.assert_not_called()
+
+
+def test_tts_still_prefers_the_builtin_named_default(env, fake_backend):
+    client, tokens, _ = env
+    _register(client, tokens, "dave", "default")
+    r = client.post(
+        "/tts", headers=_auth(tokens, "dave"), data={"text": "hi", "speaker": "default"}
+    )
+    assert r.status_code == 200
+    fake_backend.synth_builtin.assert_called_once()
+    fake_backend.synth_clone.assert_not_called()
+
+
+def test_openai_speech_still_prefers_the_builtin_named_default(env, fake_backend):
+    client, tokens, _ = env
+    _register(client, tokens, "dave", "default")
+    r = client.post(
+        "/v1/audio/speech",
+        headers=_auth(tokens, "dave"),
+        json={"input": "hi", "voice": "default", "response_format": "wav"},
+    )
+    assert r.status_code == 200
+    fake_backend.synth_builtin.assert_called_once()
+    fake_backend.synth_clone.assert_not_called()
+
+
+def test_register_rejects_a_name_that_collides_with_a_builtin_voice(env):
+    client, tokens, _ = env
+    r = _register(client, tokens, "dave", "default")
+    assert r.status_code == 400
+    assert r.json()["error"] == "reserved_name"
+
+
+def test_instruct_on_a_resolved_clone_voice_is_400(env):
+    client, tokens, _ = env
+    _register(client, tokens, "dave", "warm")
+    r = client.post(
+        "/tts",
+        headers=_auth(tokens, "dave"),
+        data={"text": "hi", "speaker": "warm", "instruct": "whisper it"},
+    )
+    assert r.status_code == 400
+    assert r.json()["error"] == "invalid_request"

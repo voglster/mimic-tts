@@ -9,6 +9,7 @@ from fastapi import File, Form, UploadFile
 from pydantic import BaseModel
 
 from mimic_server.audio import audio_response, transcode_to_wav
+from mimic_server.errors import ReservedName
 from mimic_server.synth import synthesize
 
 if TYPE_CHECKING:
@@ -58,6 +59,9 @@ def register(app: FastAPI, svc: Services) -> None:
         caller: Caller = svc.caller,
         name: Annotated[str, Form()] = "default",
     ) -> dict[str, str]:
+        builtin_names = {v["name"] for v in backend.builtin_voices()}
+        if name in builtin_names:
+            raise ReservedName(f"{name!r} is a built-in voice name and cannot be registered")
         wav_bytes = transcode_to_wav(await ref_audio.read())
         voice = voices.register(caller, name, wav_bytes, ref_text)
         # A re-registered name must not keep synthesizing from the old audio.
@@ -104,7 +108,13 @@ def register(app: FastAPI, svc: Services) -> None:
         fmt: Annotated[str, Form(alias="format")] = "wav",
     ):
         samples, sr = synthesize(
-            svc, caller, endpoint="/clone/tts", text=text, voice_spec=name, language=language
+            svc,
+            caller,
+            endpoint="/clone/tts",
+            text=text,
+            voice_spec=name,
+            language=language,
+            prefer_clone=True,
         )
         return audio_response(samples, sr, fmt=fmt)
 
