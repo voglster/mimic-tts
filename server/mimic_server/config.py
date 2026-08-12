@@ -23,6 +23,13 @@ def _default_model_cache() -> Path | None:
     return None
 
 
+def _default_db_path() -> Path:
+    data_dir = os.environ.get("MIMIC_DATA_DIR")
+    if data_dir:
+        return Path(data_dir) / "mimic.db"
+    return Path("mimic.db").resolve()
+
+
 def _default_host() -> str:
     return "0.0.0.0" if os.environ.get("MIMIC_DATA_DIR") else "127.0.0.1"
 
@@ -36,8 +43,12 @@ class Settings(BaseSettings):
     port: int = 8000
     reference_dir: Path = Field(default_factory=_default_reference_dir)
     model_cache: Path | None = Field(default_factory=_default_model_cache)
+    db_path: Path = Field(default_factory=_default_db_path)
     unload_after: int = 0  # 0 = keep model loaded forever; >0 = seconds idle before unload
     api_token: str | None = None
+    root_label: str = "root"
+    # Wyoming has no auth in-protocol, so it runs as a named key's identity.
+    wyoming_key: str = ""
     log_level: str = "INFO"
     backend: str = "chatterbox"
     allow_unauthenticated_public_bind: bool = False  # escape hatch; see app.py
