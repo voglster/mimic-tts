@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import re
 import secrets
 import sqlite3
 from dataclasses import dataclass
@@ -19,9 +20,20 @@ PREFIX_LENGTH = 8
 DEFAULT_MAX_VOICES = 5
 DEFAULT_DAILY_CHAR_QUOTA = 50000
 
+# Kept independent from voices.VALID_NAME on purpose: identity.py must not
+# depend on voices.py, even though the character policy happens to coincide.
+VALID_LABEL = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
 _UPDATABLE = frozenset(
     {"enabled", "can_upload", "max_voices", "daily_char_quota", "expires_at", "notes", "role"}
 )
+
+
+def validate_label(label: str) -> None:
+    if not VALID_LABEL.match(label):
+        raise ValueError(
+            f"invalid key label {label!r}: use 1-64 chars of letters, digits, dot, dash, underscore"
+        )
 
 
 def now_iso() -> str:
@@ -136,6 +148,7 @@ class KeyStore:
         managed_by_env: bool = False,
         token: str | None = None,
     ) -> tuple[Key, str]:
+        validate_label(label)
         plaintext = token or generate_token()
         normalized_expiry = expires_at if expires_at is None else normalize_timestamp(expires_at)
         try:

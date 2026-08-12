@@ -135,6 +135,9 @@ def test_re_registering_same_name_replaces_in_place(env):
 def test_max_voices_enforced(env):
     registry, _, dave, _ = env
     registry.keys.update("dave", max_voices=1)
+    # Caller wraps a Key snapshot; production rebuilds one per request via
+    # keys.authenticate(), so tests must rebuild it too after mutating the key.
+    dave = Caller(registry.keys.get_by_label("dave"))
     _register(registry, dave, "one")
     with pytest.raises(VoiceLimitReached):
         _register(registry, dave, "two")
@@ -143,6 +146,7 @@ def test_max_voices_enforced(env):
 def test_upload_forbidden_when_can_upload_false(env):
     registry, _, dave, _ = env
     registry.keys.update("dave", can_upload=False)
+    dave = Caller(registry.keys.get_by_label("dave"))
     with pytest.raises(UploadNotAllowed):
         _register(registry, dave, "warm")
 
@@ -152,3 +156,11 @@ def test_invalid_names_rejected(env, bad):
     registry, _, dave, _ = env
     with pytest.raises(ValueError, match="invalid voice name"):
         registry.register(dave, bad, b"RIFF", "t")
+
+
+def test_malicious_key_label_is_rejected_before_touching_disk(env):
+    registry, _, _, _ = env
+    with pytest.raises(ValueError, match="invalid key label"):
+        registry.keys.create("../../etc")
+    escaped = (registry.reference_dir / ".." / ".." / "etc").resolve()
+    assert not escaped.exists()

@@ -85,18 +85,18 @@ class VoiceRegistry:
 
     def register(self, caller: Caller, name: str, wav_bytes: bytes, ref_text: str) -> Voice:
         validate_name(name)
-        # Re-fetch rather than trust caller.key: the Caller passed in may be a
-        # snapshot taken before an admin changed can_upload/max_voices on this key.
-        key = self.keys.get_by_id(caller.id)
-        assert key is not None
-        if not key.can_upload and not key.is_admin:
+        if not caller.key.can_upload and not caller.is_admin:
             raise UploadNotAllowed("this key is not allowed to upload voices")
 
         existing = self._find(caller.id, name)
-        if existing is None and not key.is_admin and self.count_owned(caller.id) >= key.max_voices:
+        if (
+            existing is None
+            and not caller.is_admin
+            and self.count_owned(caller.id) >= caller.key.max_voices
+        ):
             raise VoiceLimitReached(
-                f"voice limit reached ({key.max_voices}); delete one first",
-                extra={"limit": key.max_voices},
+                f"voice limit reached ({caller.key.max_voices}); delete one first",
+                extra={"limit": caller.key.max_voices},
             )
 
         target = self.dir_for(caller.label, name)

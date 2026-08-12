@@ -131,3 +131,14 @@ def test_past_expiry_disguised_by_positive_offset_is_rejected(store):
 def test_garbage_expiry_raises_value_error(store):
     with pytest.raises(ValueError, match="invalid ISO-8601 timestamp"):
         store.create("dave", expires_at="soonish")
+
+
+@pytest.mark.parametrize("bad", ["../evil", "a/b", "", ".", "..", "has space", "x" * 65])
+def test_invalid_labels_rejected(store, bad):
+    with pytest.raises(ValueError, match="invalid key label"):
+        store.create(bad)
+
+
+def test_label_with_dots_dashes_and_underscores_accepted(store):
+    key, _ = store.create("dave.the-tester_2")
+    assert key.label == "dave.the-tester_2"
