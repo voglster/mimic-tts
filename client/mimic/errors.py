@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 
 class MimicError(Exception):
     """Base class for all mimic-tts client errors."""
@@ -10,10 +12,20 @@ class MimicError(Exception):
 class MimicAPIError(MimicError):
     """Server returned a non-2xx response."""
 
-    def __init__(self, status_code: int, message: str) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        message: str,
+        *,
+        body: dict[str, Any] | None = None,
+    ) -> None:
         super().__init__(f"HTTP {status_code}: {message}")
         self.status_code = status_code
         self.message = message
+        # Full JSON body, when available — carries structured extras (e.g. a
+        # 422's list-shaped `detail`, or a 409's `candidates`) that a rendered
+        # one-line message alone can't express.
+        self.body = body or {}
 
 
 class MimicAuthError(MimicAPIError):
@@ -43,8 +55,9 @@ class MimicQuotaError(MimicAPIError):
         used: int = 0,
         limit: int = 0,
         resets_at: str = "",
+        body: dict[str, Any] | None = None,
     ) -> None:
-        super().__init__(status_code, message)
+        super().__init__(status_code, message, body=body)
         self.used = used
         self.limit = limit
         self.resets_at = resets_at

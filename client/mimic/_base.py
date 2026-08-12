@@ -61,11 +61,11 @@ def raise_for_response(response: httpx.Response) -> None:
     body = _body(response)
     detail = str(body.get("detail") or response.text or response.reason_phrase or "")
     if response.status_code == 401:
-        raise MimicAuthError(response.status_code, detail)
+        raise MimicAuthError(response.status_code, detail, body=body)
     if response.status_code == 403:
-        raise MimicForbiddenError(response.status_code, detail)
+        raise MimicForbiddenError(response.status_code, detail, body=body)
     if response.status_code == 404:
-        raise MimicNotFoundError(response.status_code, detail)
+        raise MimicNotFoundError(response.status_code, detail, body=body)
     if response.status_code == 429:
         raise MimicQuotaError(
             response.status_code,
@@ -73,7 +73,8 @@ def raise_for_response(response: httpx.Response) -> None:
             used=int(body.get("used", 0)),
             limit=int(body.get("limit", 0)),
             resets_at=str(body.get("resets_at", "")),
+            body=body,
         )
     if 400 <= response.status_code < 500:
-        raise MimicValidationError(response.status_code, detail)
-    raise MimicAPIError(response.status_code, detail)
+        raise MimicValidationError(response.status_code, detail, body=body)
+    raise MimicAPIError(response.status_code, detail, body=body)
