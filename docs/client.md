@@ -105,7 +105,9 @@ shared piper with dave
 **4. Dave uses it — with a qualified name.** A bare name resolves to a
 caller's *own* voices first, so once Dave has voices of his own, `piper`
 alone might mean something else (or nothing). Shared voices should always
-be addressed as `owner/name`:
+be addressed as `owner/name`. (Full resolution order, and the one route
+that resolves clones before built-ins, are in
+[`docs/server.md`](server.md#name-resolution-bare-vs-qualified).)
 
 ```bash
 $ mimic clone say jim/piper "thanks for sharing this"
@@ -135,9 +137,13 @@ reference audio a friend may not be able to re-record.
   keys` marked with `*` — it cannot be revoked, purged, or demoted, since
   it's the recovery path if every minted admin key is lost.
 - `role` is either `user` or `admin` — there's no in-between.
-- `--quota 0` and `--max-voices 0` both mean **unlimited**, not zero
-  allowance. `mimic admin keys` and `mimic whoami` render a 0 quota as
-  `unlimited`.
+- `--quota 0` means **unlimited** characters per day, not zero allowance.
+  `mimic admin keys` and `mimic whoami` render a 0 quota as `unlimited`.
+- `--max-voices 0` means the **opposite**: zero voices allowed, i.e. no
+  uploads at all. The two options are adjacent and both take a number, but
+  they don't share zero semantics — `--quota` and `--max-voices` are not
+  symmetric. If you want to forbid uploads, use `--no-upload`; it says what
+  it does. `--max-voices 0` gets you the same result less obviously.
 - `mimic admin key rotate` does not exist by design — revoke and mint a new
   key instead.
 

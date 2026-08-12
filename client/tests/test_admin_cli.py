@@ -79,6 +79,20 @@ def test_key_create_admin_role(monkeypatch):
     assert stub.calls == [("create_key", "co", {"role": "admin"})]
 
 
+def test_key_create_help_states_max_voices_zero_blocks_uploads():
+    """`--max-voices 0` blocks all uploads, unlike `--quota 0` which is unlimited.
+
+    The server has no `max_voices <= 0 means unlimited` short-circuit — only
+    `daily_char_quota` does — so the help text must not claim otherwise.
+    """
+    result = runner.invoke(app, ["admin", "key", "create", "--help"])
+    assert result.exit_code == 0
+    flattened = " ".join(result.stdout.replace("│", " ").split())
+    assert "0 = no uploads allowed" in flattened
+    max_voices_help = flattened.split("--max-voices")[1].split("--no-upload")[0]
+    assert "unlimited" not in max_voices_help
+
+
 def test_keys_lists_a_table(monkeypatch):
     _stub_client(
         monkeypatch,

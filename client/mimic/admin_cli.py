@@ -55,7 +55,7 @@ def key_create(
     label: Annotated[str, typer.Argument(help="Short name for this key, e.g. 'dave'.")],
     quota: Annotated[int | None, typer.Option(help="Daily character limit; 0 = unlimited.")] = None,
     max_voices: Annotated[
-        int | None, typer.Option(help="How many voices they may upload; 0 = unlimited.")
+        int | None, typer.Option(help="How many voices they may upload; 0 = no uploads allowed.")
     ] = None,
     no_upload: Annotated[bool, typer.Option("--no-upload", help="Forbid uploading voices.")] = (
         False
