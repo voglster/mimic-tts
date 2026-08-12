@@ -13,6 +13,7 @@ import typer
 if TYPE_CHECKING:
     from collections.abc import Callable
 
+from mimic.admin_cli import admin_app
 from mimic.client import Client
 from mimic.config import load_config
 from mimic.errors import (
@@ -34,6 +35,7 @@ from mimic.recorder import (
 app = typer.Typer(no_args_is_help=True, add_completion=False, help="mimic-tts CLI")
 clone_app = typer.Typer(no_args_is_help=True, help="Clone voice operations")
 app.add_typer(clone_app, name="clone")
+app.add_typer(admin_app, name="admin")
 
 
 def _format_validation_error(e: MimicValidationError) -> str:
@@ -53,7 +55,7 @@ def _format_validation_error(e: MimicValidationError) -> str:
         return "; ".join(fields)
     candidates = e.body.get("candidates")
     if candidates:
-        return f"{e.message} — use a qualified name (owner/name): {', '.join(candidates)}"
+        return f"{e.message}: {', '.join(candidates)}"
     return e.message
 
 
@@ -65,9 +67,10 @@ def _run[T](action: Callable[[], T]) -> T:
     try:
         return action()
     except MimicQuotaError as e:
-        typer.echo(f"quota exceeded: {e.used:,} / {e.limit:,} characters today", err=True)
+        message = f"quota exceeded: {e.used:,} / {e.limit:,} characters today"
         if e.resets_at:
-            typer.echo(f"resets at {e.resets_at}", err=True)
+            message += f" (resets at {e.resets_at})"
+        typer.echo(message, err=True)
         raise typer.Exit(1) from e
     except MimicForbiddenError as e:
         typer.echo(f"not permitted: {e.message}", err=True)

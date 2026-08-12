@@ -2,7 +2,12 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 from mimic.cli import app
-from mimic.errors import MimicForbiddenError, MimicQuotaError, MimicValidationError
+from mimic.errors import (
+    MimicForbiddenError,
+    MimicNotFoundError,
+    MimicQuotaError,
+    MimicValidationError,
+)
 from typer.testing import CliRunner
 
 
@@ -334,8 +339,11 @@ def test_quota_error_is_a_clean_message_not_a_traceback(runner, monkeypatch):
     )
     result = runner.invoke(app, ["say", "hello"])
     assert result.exit_code == 1
-    assert "quota" in result.stderr.lower()
-    assert "95 / 100" in result.stderr
+    lines = [line for line in result.stderr.splitlines() if line.strip()]
+    assert len(lines) == 1
+    assert "quota" in lines[0].lower()
+    assert "95 / 100" in lines[0]
+    assert "2026-08-12T00:00:00+00:00" in lines[0]
     assert "Traceback" not in result.output
 
 
@@ -344,6 +352,18 @@ def test_forbidden_error_is_a_clean_message(runner, monkeypatch):
     result = runner.invoke(app, ["say", "hello"])
     assert result.exit_code == 1
     assert "admin key required" in result.stderr
+    assert "Traceback" not in result.output
+
+
+def test_404_not_found_error_is_one_clean_line(runner, monkeypatch):
+    """A 404 must not imply the voice exists — it doesn't, and never did."""
+    _stub_client(monkeypatch, say_raises=MimicNotFoundError(404, "clone voice 'ghost' not found"))
+    result = runner.invoke(app, ["say", "hello"])
+    assert result.exit_code == 1
+    lines = [line for line in result.stderr.splitlines() if line.strip()]
+    assert len(lines) == 1
+    assert "not found" in lines[0].lower()
+    assert "ghost" in lines[0]
     assert "Traceback" not in result.output
 
 
@@ -380,6 +400,23 @@ def test_409_ambiguous_voice_shows_candidates(runner, monkeypatch):
     assert "dave/warm" in result.stderr
     assert "erin/warm" in result.stderr
     assert "Traceback" not in result.output
+
+
+def test_409_ambiguous_voice_does_not_repeat_the_qualified_name_instruction(runner, monkeypatch):
+    """The server's own message already says 'use a qualified name'; don't say it twice."""
+    body = {
+        "detail": "'warm' matches several voices; use a qualified name",
+        "candidates": ["dave/warm", "erin/warm"],
+    }
+    _stub_client(
+        monkeypatch,
+        say_raises=MimicValidationError(409, body["detail"], body=body),
+    )
+    result = runner.invoke(app, ["say", "hello"])
+    assert result.exit_code == 1
+    assert result.stderr.lower().count("use a qualified name") == 1
+    assert "dave/warm" in result.stderr
+    assert "erin/warm" in result.stderr
 
 
 def test_share_to_a_person_grants(runner, monkeypatch):

@@ -45,6 +45,12 @@ mimic record alice --audio sample.wav --text "..."  # register a clone
 mimic clone say alice "now I sound like alice"
 mimic clones                             # list registered clones
 mimic voices                             # list built-in voices (just "default")
+
+# multi-user (once MIMIC_API_TOKEN is set on the server)
+mimic whoami                             # your key, role, quota, usage today
+mimic share alice --to dave              # let another key use your voice
+mimic admin key create dave --quota 100000  # mint a key for a friend (admin only)
+mimic admin usage --key dave             # check what a key has used (admin only)
 ```
 
 The client reads `MIMIC_SERVER_URL` from the environment, or
