@@ -1,4 +1,7 @@
+from datetime import UTC, datetime, timedelta, timezone
+
 import pytest
+from mimic_server import identity
 from mimic_server.db import Database
 from mimic_server.errors import LabelInUse
 from mimic_server.identity import KeyStore, generate_token, hash_token, prefix_of
@@ -90,8 +93,14 @@ def test_ensure_env_root_is_idempotent_and_rotates(store):
     assert store.authenticate("secret-two").id == root.id
 
 
-def test_z_suffixed_expiry_is_normalized_and_compares_as_expired(store):
-    _, token = store.create("dave", expires_at="2000-01-01T00:00:00Z")
+def test_z_suffixed_expiry_at_current_second_is_rejected_as_expired(store, monkeypatch):
+    # 'Z' (0x5A) sorts after '.' and '+' in ASCII, so a raw, un-normalized "...Z"
+    # string with its fractional seconds dropped compares as *greater than* (i.e.
+    # not-yet-expired) a same-instant now_iso() that still carries microseconds
+    # and a "+00:00" offset. Pinning "now" removes any dependence on wall-clock
+    # timing between create() and authenticate().
+    monkeypatch.setattr(identity, "now_iso", lambda: "2026-01-01T12:00:00.500000+00:00")
+    _, token = store.create("dave", expires_at="2026-01-01T12:00:00Z")
     assert store.authenticate(token) is None
 
 
@@ -101,14 +110,22 @@ def test_non_utc_offset_expiry_is_stored_as_utc(store):
     assert key.expires_at == "2000-01-01T05:00:00+00:00"
 
 
-def test_naive_expiry_is_treated_as_utc(store):
-    _, token = store.create("dave", expires_at="2000-01-01T00:00:00")
+def test_naive_expiry_is_stored_with_explicit_utc_offset(store):
+    # A naive value only differs from its normalized form by the missing
+    # "+00:00" suffix, which never flips ordering against now_iso() at any
+    # timescale -- so the discriminating check here is the stored
+    # representation itself, not an authenticate() outcome.
+    store.create("dave", expires_at="2000-01-01T00:00:00")
+    key = store.get_by_label("dave")
+    assert key.expires_at == "2000-01-01T00:00:00+00:00"
+
+
+def test_past_expiry_disguised_by_positive_offset_is_rejected(store):
+    now = datetime.now(UTC)
+    genuinely_past = now - timedelta(minutes=30)
+    disguised = genuinely_past.astimezone(timezone(timedelta(hours=5))).isoformat()
+    _, token = store.create("dave", expires_at=disguised)
     assert store.authenticate(token) is None
-
-
-def test_far_future_non_utc_expiry_is_not_expired(store):
-    _, token = store.create("dave", expires_at="2099-01-01T00:00:00-05:00")
-    assert store.authenticate(token).label == "dave"
 
 
 def test_garbage_expiry_raises_value_error(store):
