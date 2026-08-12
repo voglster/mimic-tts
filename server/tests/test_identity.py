@@ -88,3 +88,29 @@ def test_ensure_env_root_is_idempotent_and_rotates(store):
     assert again.id == root.id
     assert store.authenticate("secret-one") is None
     assert store.authenticate("secret-two").id == root.id
+
+
+def test_z_suffixed_expiry_is_normalized_and_compares_as_expired(store):
+    _, token = store.create("dave", expires_at="2000-01-01T00:00:00Z")
+    assert store.authenticate(token) is None
+
+
+def test_non_utc_offset_expiry_is_stored_as_utc(store):
+    store.create("dave", expires_at="2000-01-01T00:00:00-05:00")
+    key = store.get_by_label("dave")
+    assert key.expires_at == "2000-01-01T05:00:00+00:00"
+
+
+def test_naive_expiry_is_treated_as_utc(store):
+    _, token = store.create("dave", expires_at="2000-01-01T00:00:00")
+    assert store.authenticate(token) is None
+
+
+def test_far_future_non_utc_expiry_is_not_expired(store):
+    _, token = store.create("dave", expires_at="2099-01-01T00:00:00-05:00")
+    assert store.authenticate(token).label == "dave"
+
+
+def test_garbage_expiry_raises_value_error(store):
+    with pytest.raises(ValueError, match="invalid ISO-8601 timestamp"):
+        store.create("dave", expires_at="soonish")

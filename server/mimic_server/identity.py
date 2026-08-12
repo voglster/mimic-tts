@@ -28,6 +28,23 @@ def now_iso() -> str:
     return datetime.now(UTC).isoformat()
 
 
+def normalize_timestamp(value: str) -> str:
+    """Normalize an ISO-8601 timestamp to a UTC `isoformat()` string.
+
+    Expiry comparisons are plain string comparisons against `now_iso()`, which
+    is only sound when every stored timestamp shares the same UTC
+    representation. A naive value is treated as UTC; an offset-aware value is
+    converted to UTC. Anything unparseable raises `ValueError` here, at the
+    boundary, rather than silently mis-sorting later.
+    """
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError as e:
+        raise ValueError(f"invalid ISO-8601 timestamp: {value!r}") from e
+    parsed = parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
+    return parsed.isoformat()
+
+
 def generate_token() -> str:
     return TOKEN_PREFIX + secrets.token_urlsafe(32)
 
@@ -120,6 +137,7 @@ class KeyStore:
         token: str | None = None,
     ) -> tuple[Key, str]:
         plaintext = token or generate_token()
+        normalized_expiry = expires_at if expires_at is None else normalize_timestamp(expires_at)
         try:
             with self.db.cursor() as cur:
                 cur.execute(
@@ -134,7 +152,7 @@ class KeyStore:
                         prefix_of(plaintext),
                         role,
                         now_iso(),
-                        expires_at,
+                        normalized_expiry,
                         int(can_upload),
                         max_voices,
                         daily_char_quota,
@@ -180,6 +198,8 @@ class KeyStore:
         unknown = set(fields) - _UPDATABLE
         if unknown:
             raise ValueError(f"cannot update {sorted(unknown)}")
+        if fields.get("expires_at") is not None:
+            fields["expires_at"] = normalize_timestamp(fields["expires_at"])
         assignments = ", ".join(f"{name} = ?" for name in fields)
         values = [int(v) if isinstance(v, bool) else v for v in fields.values()]
         with self.db.cursor() as cur:
