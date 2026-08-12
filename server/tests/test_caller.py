@@ -29,6 +29,10 @@ def env(tmp_path):
         def boom() -> None:
             raise Forbidden("nope")
 
+        @app.get("/boom-value-error")
+        def boom_value_error() -> None:
+            raise ValueError("a genuine bug, not a bad request")
+
         return TestClient(app), result
 
     return build
@@ -79,3 +83,17 @@ def test_domain_errors_map_to_status_and_payload(env):
     r = client.get("/boom")
     assert r.status_code == 403
     assert r.json() == {"error": "forbidden", "detail": "nope"}
+
+
+def test_an_unscoped_value_error_is_a_server_error_not_a_client_error(env):
+    """A plain ValueError raised anywhere (soundfile, numpy, a genuine bug) is
+    a server fault, not a client-fault 400. Only domain code that means "bad
+    input" should raise a MimicError subclass, handled separately.
+
+    `raise_server_exceptions=False` makes the test client behave like a real
+    deployment (ASGI middleware turns the unhandled exception into a 500)
+    instead of re-raising it into the test."""
+    client, _ = env()
+    raw_client = TestClient(client.app, raise_server_exceptions=False)
+    r = raw_client.get("/boom-value-error")
+    assert r.status_code == 500

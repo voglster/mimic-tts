@@ -3,7 +3,6 @@ synth-triggering routes (/tts, /clone/tts, /v1/audio/speech, /clone/oneshot)."""
 
 from __future__ import annotations
 
-import pytest
 from conftest import _auth, _register, _wav
 from mimic_server.usage import UsageTracker
 
@@ -11,7 +10,6 @@ from mimic_server.usage import UsageTracker
 # tests/conftest.py.
 
 
-@pytest.mark.xfail(reason="/me lands in Task 11", strict=True)
 def test_builtin_tts_records_usage(env):
     client, tokens, _ = env
     assert (

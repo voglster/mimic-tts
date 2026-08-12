@@ -314,3 +314,33 @@ def test_public_bind_with_explicit_override_starts(tmp_path, fake_backend):
     )
     app = build_app(settings, backend_factory=lambda _s: fake_backend)
     assert app is not None  # smoke — no RuntimeError
+
+
+def test_public_bind_override_resolves_anonymous_callers_to_non_admin(tmp_path, fake_backend):
+    """The escape hatch must not silently hand out admin: with no token
+    configured, anonymous callers on a publicly-bound server used to resolve
+    to the root *admin* Caller. Now that /admin/* exists, that would be
+    remote anonymous admin access."""
+    settings = Settings(
+        reference_dir=tmp_path,
+        db_path=tmp_path / "mimic.db",
+        host="0.0.0.0",
+        api_token=None,
+        allow_unauthenticated_public_bind=True,
+    )
+    client = TestClient(build_app(settings, backend_factory=lambda _s: fake_backend))
+    assert client.get("/me").json()["role"] == "user"
+    assert client.get("/admin/keys").status_code == 403
+
+
+def test_public_bind_override_warns_admin_routes_unavailable(tmp_path, fake_backend, caplog):
+    settings = Settings(
+        reference_dir=tmp_path,
+        db_path=tmp_path / "mimic.db",
+        host="0.0.0.0",
+        api_token=None,
+        allow_unauthenticated_public_bind=True,
+    )
+    with caplog.at_level("WARNING"):
+        build_app(settings, backend_factory=lambda _s: fake_backend)
+    assert "admin" in caplog.text.lower()

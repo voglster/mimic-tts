@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from mimic_server.errors import LabelInUse
+from mimic_server.errors import InvalidRequest, LabelInUse
 
 if TYPE_CHECKING:
     from mimic_server.db import Database
@@ -31,7 +31,7 @@ _UPDATABLE = frozenset(
 
 def validate_label(label: str) -> None:
     if not VALID_LABEL.match(label):
-        raise ValueError(
+        raise InvalidRequest(
             f"invalid key label {label!r}: use 1-64 chars of letters, digits, dot, dash, underscore"
         )
 
@@ -52,7 +52,7 @@ def normalize_timestamp(value: str) -> str:
     try:
         parsed = datetime.fromisoformat(value)
     except ValueError as e:
-        raise ValueError(f"invalid ISO-8601 timestamp: {value!r}") from e
+        raise InvalidRequest(f"invalid ISO-8601 timestamp: {value!r}") from e
     parsed = parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed.astimezone(UTC)
     return parsed.isoformat()
 

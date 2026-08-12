@@ -11,6 +11,8 @@ from typing import TYPE_CHECKING
 from mimic_server.errors import (
     AmbiguousVoice,
     Forbidden,
+    GranteeNotFound,
+    InvalidRequest,
     UploadNotAllowed,
     VoiceLimitReached,
     VoiceNotFound,
@@ -29,7 +31,7 @@ VISIBILITIES = frozenset({"private", "public"})
 
 def validate_name(name: str) -> None:
     if not VALID_NAME.match(name):
-        raise ValueError(
+        raise InvalidRequest(
             f"invalid voice name {name!r}: use 1-64 chars of letters, digits, dot, dash, underscore"
         )
 
@@ -205,7 +207,7 @@ class VoiceRegistry:
 
     def set_visibility(self, caller: Caller, spec: str, visibility: str) -> Voice:
         if visibility not in VISIBILITIES:
-            raise ValueError(f"visibility must be one of {sorted(VISIBILITIES)}")
+            raise InvalidRequest(f"visibility must be one of {sorted(VISIBILITIES)}")
         voice = self._require_owner(caller, spec)
         with self.db.cursor() as cur:
             cur.execute("UPDATE voices SET visibility = ? WHERE id = ?", (visibility, voice.id))
@@ -217,7 +219,7 @@ class VoiceRegistry:
         voice = self._require_owner(caller, spec)
         grantee = self.keys.get_by_label(grantee_label)
         if grantee is None:
-            raise VoiceNotFound(f"no key labeled {grantee_label!r}")
+            raise GranteeNotFound(f"no key labeled {grantee_label!r}")
         with self.db.cursor() as cur:
             cur.execute(
                 "INSERT OR IGNORE INTO voice_grants (voice_id, grantee_key_id, granted_by, created_at) "
@@ -229,7 +231,7 @@ class VoiceRegistry:
         voice = self._require_owner(caller, spec)
         grantee = self.keys.get_by_label(grantee_label)
         if grantee is None:
-            raise VoiceNotFound(f"no key labeled {grantee_label!r}")
+            raise GranteeNotFound(f"no key labeled {grantee_label!r}")
         with self.db.cursor() as cur:
             cur.execute(
                 "DELETE FROM voice_grants WHERE voice_id = ? AND grantee_key_id = ?",

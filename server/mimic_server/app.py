@@ -15,7 +15,7 @@ from mimic_server.auth import install_error_handler, make_caller_dependency
 from mimic_server.backends import TTSBackend, make_backend
 from mimic_server.bootstrap import bootstrap
 from mimic_server.config import Settings
-from mimic_server.routes import clones, openai, system, tts
+from mimic_server.routes import admin, clones, openai, system, tts
 from mimic_server.services import Services
 from mimic_server.usage import UsageTracker
 
@@ -51,7 +51,9 @@ def _check_public_bind_auth(settings: Settings) -> None:
             logger.warning(
                 "auth OFF and host=%s (public). "
                 "MIMIC_ALLOW_UNAUTHENTICATED_PUBLIC_BIND=1 was set — assuming "
-                "upstream access control is enforced.",
+                "upstream access control is enforced. Anonymous callers resolve "
+                "to a non-admin identity, so /admin/* routes are unavailable "
+                "without a token.",
                 settings.host,
             )
         else:
@@ -112,7 +114,7 @@ def build_app(
     )
     app = FastAPI(title="mimic-tts API", lifespan=_make_lifespan(backend, settings))
     install_error_handler(app)
-    for module in (system, tts, clones, openai):
+    for module in (system, tts, clones, openai, admin):
         module.register(app, svc)
     _mount_web_ui(app)
     return app

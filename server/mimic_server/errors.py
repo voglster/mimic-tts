@@ -38,6 +38,16 @@ class VoiceNotFound(MimicError):  # noqa: N818
     code = "voice_not_found"
 
 
+class GranteeNotFound(MimicError):  # noqa: N818
+    status = 404
+    code = "grantee_not_found"
+
+
+class KeyNotFound(MimicError):  # noqa: N818
+    status = 404
+    code = "key_not_found"
+
+
 class AmbiguousVoice(MimicError):  # noqa: N818
     status = 409
     code = "ambiguous_voice"
@@ -58,7 +68,17 @@ class QuotaExceeded(MimicError):  # noqa: N818
     code = "quota_exceeded"
 
 
-class InvalidRequest(MimicError):  # noqa: N818
+class InvalidRequest(MimicError, ValueError):  # noqa: N818
+    """Bad input from a caller — never a genuine bug.
+
+    Also inherits `ValueError` so lower-level unit tests that call the
+    validation helpers directly (`pytest.raises(ValueError, ...)`) keep
+    working, while the HTTP layer maps it to 400 through the `MimicError`
+    handler. A plain `ValueError` raised anywhere else (soundfile, numpy, a
+    real bug) is deliberately *not* caught by any handler and surfaces as a
+    500 — see `auth.install_error_handler`.
+    """
+
     status = 400
     code = "invalid_request"
 

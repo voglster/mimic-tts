@@ -13,6 +13,23 @@ _EXEMPT_UNAUTHENTICATED_PATHS = frozenset(
 )
 
 
+def test_register_with_a_bad_name_is_400(env):
+    client, tokens, _ = env
+    r = _register(client, tokens, "dave", "has space")
+    assert r.status_code == 400
+    assert r.json()["error"] == "invalid_request"
+
+
+def test_set_visibility_to_a_bad_value_is_400(env):
+    client, tokens, _ = env
+    _register(client, tokens, "dave", "warm")
+    r = client.patch(
+        "/clone/voices/warm", headers=_auth(tokens, "dave"), json={"visibility": "sorta-public"}
+    )
+    assert r.status_code == 400
+    assert r.json()["error"] == "invalid_request"
+
+
 def test_register_is_owned_by_the_caller(env):
     client, tokens, _ = env
     assert _register(client, tokens, "dave", "warm").status_code == 200

@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Annotated, Any
 from fastapi import File, HTTPException, UploadFile
 
 from mimic_server.audio import transcode_to_wav
+from mimic_server.usage import day_start_iso
 
 if TYPE_CHECKING:
     from fastapi import FastAPI
@@ -21,13 +22,36 @@ def register(app: FastAPI, svc: Services) -> None:
 
     @app.get("/health")
     async def health() -> dict[str, Any]:
-        on_disk = sorted(p.parent.name for p in settings.reference_dir.glob("*/audio.wav"))
+        """Deliberately anonymous and deliberately uninformative — it is the
+        one unauthenticated endpoint, so it must not enumerate voices or
+        models."""
         return {
             "status": "ok",
             "backend": settings.backend,
-            "models_loaded": backend.loaded_keys(),
-            "registered_voices": on_disk,
             "stt_enabled": bool(settings.stt_uri),
+        }
+
+    # `caller` takes svc.caller as a real default, not via `Annotated[Caller,
+    # svc.caller]` — `from __future__ import annotations` stringifies
+    # annotations, and FastAPI resolves those strings against this module's
+    # globals only, never this closure's `svc`.
+    @app.get("/me")
+    async def me(caller: Caller = svc.caller) -> dict[str, Any]:
+        totals = svc.usage.totals(key_id=caller.id, since=day_start_iso())
+        today = totals[0] if totals else {"requests": 0, "chars": 0, "audio_seconds": 0.0}
+        return {
+            "label": caller.label,
+            "role": caller.key.role,
+            "can_upload": caller.key.can_upload,
+            "max_voices": caller.key.max_voices,
+            "voices_used": svc.voices.count_owned(caller.id),
+            "daily_char_quota": caller.key.daily_char_quota,
+            "usage_today": {
+                "requests": today["requests"],
+                "chars": today["chars"],
+                "audio_seconds": today["audio_seconds"],
+            },
+            "models_loaded": backend.loaded_keys() if caller.is_admin else None,
         }
 
     @app.get("/voices")
