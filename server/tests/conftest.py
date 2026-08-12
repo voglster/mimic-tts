@@ -12,6 +12,7 @@ from fastapi.testclient import TestClient
 from mimic_server.app import build_app
 from mimic_server.bootstrap import bootstrap
 from mimic_server.config import Settings
+from mimic_server.services import Services, assemble_services
 
 
 def _wav() -> bytes:
@@ -35,6 +36,18 @@ def fake_backend():
 
     b.run_lifecycle = _no_lifecycle
     return b
+
+
+def _services(tmp_path, fake_backend, **kw: object) -> Services:
+    """Assemble a `Services` bundle the same way `build_app` does, for tests
+    that want direct access to it instead of going through the HTTP layer."""
+    settings = Settings(
+        reference_dir=tmp_path / "reference",
+        db_path=tmp_path / "mimic.db",
+        **kw,
+    )
+    settings.reference_dir.mkdir(parents=True, exist_ok=True)
+    return assemble_services(settings, fake_backend)
 
 
 @pytest.fixture

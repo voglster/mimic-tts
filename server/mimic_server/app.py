@@ -8,16 +8,14 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from fastapi import Depends, FastAPI
+from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
-from mimic_server.auth import install_error_handler, make_caller_dependency
+from mimic_server.auth import install_error_handler
 from mimic_server.backends import TTSBackend, make_backend
-from mimic_server.bootstrap import bootstrap
 from mimic_server.config import Settings
 from mimic_server.routes import admin, clones, openai, system, tts
-from mimic_server.services import Services
-from mimic_server.usage import UsageTracker
+from mimic_server.services import Services, assemble_services
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -68,24 +66,24 @@ def _check_public_bind_auth(settings: Settings) -> None:
     )
 
 
-def _make_lifespan(backend: TTSBackend, settings: Settings) -> Any:
+def _make_lifespan(svc: Services) -> Any:
     """Build the FastAPI lifespan that supervises backend + optional Wyoming."""
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         import asyncio
 
-        tasks = [asyncio.create_task(backend.run_lifecycle())]
-        if settings.wyoming_enabled:
+        tasks = [asyncio.create_task(svc.backend.run_lifecycle())]
+        if svc.settings.wyoming_enabled:
             from mimic_server.wyoming_server import run_wyoming_server
 
-            tasks.append(asyncio.create_task(run_wyoming_server(backend, settings)))
+            tasks.append(asyncio.create_task(run_wyoming_server(svc)))
         try:
             yield
         finally:
             for t in tasks:
                 t.cancel()
-            backend.unload()
+            svc.backend.unload()
 
     return lifespan
 
@@ -102,17 +100,7 @@ def build_app(
 
     _configure_environment(settings)
     backend = (backend_factory or make_backend)(settings)
-    boot = bootstrap(settings)
-    svc = Services(
-        settings=settings,
-        backend=backend,
-        db=boot.db,
-        keys=boot.keys,
-        voices=boot.voices,
-        usage=UsageTracker(boot.db),
-        root=boot.root,
-        caller=Depends(make_caller_dependency(settings, boot.keys, boot.root)),
-    )
+    svc = assemble_services(settings, backend)
     # A reachable server must not publish its schema — /admin/* would
     # otherwise be fully documented to anyone who hits /openapi.json, which
     # needs no token (docs routes are unauthenticated by FastAPI's own
@@ -127,7 +115,7 @@ def build_app(
         if not settings.api_token and is_loopback
         else {"docs_url": None, "redoc_url": None, "openapi_url": None}
     )
-    app = FastAPI(title="mimic-tts API", lifespan=_make_lifespan(backend, settings), **docs_kwargs)
+    app = FastAPI(title="mimic-tts API", lifespan=_make_lifespan(svc), **docs_kwargs)
     install_error_handler(app)
     for module in (system, tts, clones, openai, admin):
         module.register(app, svc)

@@ -1,9 +1,12 @@
 """Wyoming protocol server — Home Assistant voice-pipeline integration.
 
-Wyoming has no auth (peer-to-peer JSONL + PCM). The trust boundary is the
-network: the container binds to all interfaces, and the host firewall /
-port-mapping decides who can reach port 10200. Do NOT expose this to the
-public internet — use it on a LAN or tailnet.
+Wyoming carries no credentials (peer-to-peer JSONL + PCM), so every
+connection runs as a single, pre-configured key identity (`resolve_wyoming_caller`)
+rather than as an authenticated caller. That identity work bounds the blast
+radius of a compromised or misconfigured LAN — it does NOT replace the network
+boundary. The trust boundary is still the network: the container binds to all
+interfaces, and the host firewall / port-mapping decides who can reach port
+10200. Do NOT expose this to the public internet — use it on a LAN or tailnet.
 """
 
 from __future__ import annotations
@@ -16,7 +19,6 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import soundfile as sf
-from fastapi import HTTPException
 from wyoming.audio import AudioChunk, AudioStart, AudioStop
 from wyoming.error import Error
 from wyoming.info import Attribution, Describe, Info, TtsProgram, TtsVoice
@@ -29,11 +31,14 @@ from wyoming.tts import (
     SynthesizeStopped,
 )
 
+from mimic_server.errors import QuotaExceeded, VoiceNotFound
+from mimic_server.identity import Caller
+from mimic_server.synth import synthesize
+
 if TYPE_CHECKING:
     from wyoming.event import Event
 
-    from mimic_server.backends import TTSBackend
-    from mimic_server.config import Settings
+    from mimic_server.services import Services
 
 logger = logging.getLogger(__name__)
 
@@ -70,8 +75,29 @@ def _split_sentences(text: str) -> list[str]:
     return out
 
 
-def _build_info(backend: TTSBackend, settings: Settings) -> Info:
-    """Construct the Wyoming Info event — our advertised voice catalogue."""
+def resolve_wyoming_caller(svc: Services) -> Caller:
+    """Resolve the identity Wyoming runs as.
+
+    The protocol carries no credentials, so every connection runs as one
+    pre-configured key rather than an authenticated caller. `MIMIC_WYOMING_KEY`
+    names that key; an unset or unresolvable label falls back to root, since a
+    misconfigured/absent label must not take Home Assistant's TTS offline.
+    """
+    label = svc.settings.wyoming_key
+    if label:
+        key = svc.keys.get_by_label(label)
+        if key is not None:
+            return Caller(key)
+        logger.warning("MIMIC_WYOMING_KEY=%r does not match any key; falling back to root", label)
+    else:
+        logger.info("MIMIC_WYOMING_KEY unset; Wyoming runs as root")
+    return Caller(svc.root)
+
+
+def _build_info(svc: Services, caller: Caller) -> Info:
+    """Construct the Wyoming Info event — the voice catalogue visible to
+    `caller`, so HA's voice picker reflects the configured identity's
+    permissions rather than every voice on the server."""
     attribution = Attribution(name="mimic-tts", url="https://github.com/voglster/mimic-tts")
     voices: list[TtsVoice] = [
         TtsVoice(
@@ -82,25 +108,25 @@ def _build_info(backend: TTSBackend, settings: Settings) -> Info:
             languages=[v.get("language", "en")],
             version=None,
         )
-        for v in backend.builtin_voices()
+        for v in svc.backend.builtin_voices()
     ]
     voices.extend(
         TtsVoice(
-            name=p.parent.name,
-            description=f"clone: {p.parent.name}",
+            name=voice.qualified,
+            description=f"clone: {voice.qualified}",
             attribution=attribution,
             installed=True,
             languages=["en"],
             version=None,
         )
-        for p in sorted(settings.reference_dir.glob("*/audio.wav"))
+        for voice in svc.voices.visible_to(caller)
     )
 
     return Info(
         tts=[
             TtsProgram(
                 name="mimic-tts",
-                description=f"mimic-tts ({settings.backend})",
+                description=f"mimic-tts ({svc.settings.backend})",
                 attribution=attribution,
                 installed=True,
                 voices=voices,
@@ -125,40 +151,21 @@ def _samples_to_int16_bytes(samples: Any, sample_rate: int) -> tuple[bytes, int]
     return pcm.tobytes(), int(sr)
 
 
-def _route_synth(
-    backend: TTSBackend, settings: Settings, text: str, voice_name: str | None
-) -> tuple[Any, int]:
-    """Route a Wyoming synthesize call to backend builtin-or-clone."""
-    name = voice_name or "default"
-    builtin_names = {v["name"] for v in backend.builtin_voices()}
-    if name in builtin_names:
-        return backend.synth_builtin(text=text, speaker=name)
-    ref_path = settings.reference_dir / name / "audio.wav"
-    text_path = settings.reference_dir / name / "text.txt"
-    if not (ref_path.exists() and text_path.exists()):
-        raise HTTPException(400, f"no voice '{name}' registered")
-    return backend.synth_clone(
-        name=name,
-        text=text,
-        ref_audio_path=ref_path,
-        ref_text=text_path.read_text(),
-    )
-
-
 class _MimicHandler(AsyncEventHandler):
-    """One handler per Wyoming client connection."""
+    """One handler per Wyoming client connection. Every connection runs as
+    the single `caller` identity resolved once at server startup."""
 
     def __init__(
         self,
         *args: Any,
-        backend: TTSBackend,
-        settings: Settings,
+        svc: Services,
+        caller: Caller,
         info: Info,
         **kwargs: Any,
     ) -> None:
         super().__init__(*args, **kwargs)
-        self._backend = backend
-        self._settings = settings
+        self._svc = svc
+        self._caller = caller
         self._info = info
         # Per-connection streaming-input state. Populated on SynthesizeStart,
         # mutated by SynthesizeChunk, cleared on SynthesizeStop.
@@ -248,13 +255,19 @@ class _MimicHandler(AsyncEventHandler):
         """Synthesize one sentence and emit AudioStart (once) + AudioChunks.
         Sets _stream_aborted on failure so callers can short-circuit."""
         try:
-            samples, this_sr = _route_synth(
-                self._backend, self._settings, sentence, self._stream_voice
+            samples, this_sr = synthesize(
+                self._svc,
+                self._caller,
+                endpoint="wyoming",
+                text=sentence,
+                voice_spec=self._stream_voice or "default",
             )
-        except HTTPException as e:
-            logger.warning("wyoming synth failed: %s", e.detail)
+        except (QuotaExceeded, VoiceNotFound) as e:
+            # A failed utterance, not a dead connection: HA should see one
+            # bad TTS request, not a server crash or a hung session.
+            logger.warning("wyoming synth failed: %s", e.message)
             if not self._stream_audio_started:
-                await self.write_event(Error(text=str(e.detail), code="bad-voice").event())
+                await self.write_event(Error(text=e.message, code=e.code).event())
             self._stream_aborted = True
             return
         except Exception as e:
@@ -306,11 +319,27 @@ class _MimicHandler(AsyncEventHandler):
         self._stream_aborted = False
 
 
-async def run_wyoming_server(backend: TTSBackend, settings: Settings) -> None:
-    """Start the Wyoming TCP server. Cancellable via task.cancel()."""
-    info = _build_info(backend, settings)
+async def run_wyoming_server(svc: Services) -> None:
+    """Start the Wyoming TCP server. Cancellable via task.cancel().
+
+    The caller identity is resolved once here, at startup, not per request:
+    Wyoming holds one long-lived TCP listener with no per-connection
+    credentials to re-resolve, and the deployment model (`MIMIC_WYOMING_KEY`
+    set once, changed rarely) doesn't call for it. The tradeoff is the same
+    one every long-lived `Caller` snapshot makes: if that key's quota or
+    role is edited mid-run, this snapshot goes stale until the server
+    restarts. Wyoming's traffic (one household's HA instance) makes that an
+    acceptable staleness window.
+    """
+    settings = svc.settings
+    caller = resolve_wyoming_caller(svc)
+    info = _build_info(svc, caller)
     uri = f"tcp://{settings.wyoming_host}:{settings.wyoming_port}"
-    logger.info("starting Wyoming server on %s (NO AUTH — keep on tailnet/LAN only)", uri)
+    logger.info(
+        "starting Wyoming server on %s as key %r (NO AUTH — keep on tailnet/LAN only)",
+        uri,
+        caller.label,
+    )
     server = AsyncServer.from_uri(uri)
-    handler_factory = partial(_MimicHandler, backend=backend, settings=settings, info=info)
+    handler_factory = partial(_MimicHandler, svc=svc, caller=caller, info=info)
     await server.run(handler_factory)
