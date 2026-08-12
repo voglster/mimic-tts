@@ -86,7 +86,12 @@ new = re.sub(r'__version__ = ".*"', f'__version__ = "{ver}"', text)
 path.write_text(new)
 PY
 
-git add client/pyproject.toml server/pyproject.toml client/mimic/_version.py
+# The lock records both workspace members' versions, so it goes stale on every
+# bump. Re-lock here or the tree is left dirty and the next release's own
+# preflight refuses to run.
+uv lock --quiet
+
+git add client/pyproject.toml server/pyproject.toml client/mimic/_version.py uv.lock
 git commit -m "chore: release ${NEW_VERSION}"
 
 git tag "$NEW_VERSION"
