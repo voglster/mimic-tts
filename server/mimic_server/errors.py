@@ -84,5 +84,5 @@ class InvalidRequest(MimicError, ValueError):  # noqa: N818
 
 
 class ReservedName(MimicError):  # noqa: N818
-    status = 400
+    status = 409
     code = "reserved_name"

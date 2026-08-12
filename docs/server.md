@@ -14,13 +14,16 @@ distributed via PyPI — install it via Docker or from source).
 | `MIMIC_REFERENCE_DIR` | `./reference` | `/data/reference` | Persisted clone reference audio + transcripts |
 | `MIMIC_MODEL_CACHE` | (HF default) | `/data/models` | Sets `HF_HOME`; weights cache here |
 | `MIMIC_UNLOAD_AFTER` | `0` | `0` | Seconds idle before models unload (`0` = keep loaded forever) |
-| `MIMIC_API_TOKEN` | unset | unset | Optional bearer token (off by default) |
+| `MIMIC_API_TOKEN` | unset | unset | Optional bearer token; becomes the admin key (see [Multi-user access](#multi-user-access)) |
 | `MIMIC_LOG_LEVEL` | `INFO` | `INFO` | Log level |
 | `MIMIC_BACKEND` | `chatterbox` | `chatterbox` | TTS engine (currently only `chatterbox`) |
+| `MIMIC_DB_PATH` | `./mimic.db` | `/data/mimic.db` | SQLite database holding keys, voice ownership, grants, and usage |
+| `MIMIC_ROOT_LABEL` | `root` | `root` | Label for the admin/root key seeded from `MIMIC_API_TOKEN`; also the owner directory legacy voices get adopted under |
 | `MIMIC_ALLOW_UNAUTHENTICATED_PUBLIC_BIND` | `false` | `false` | Allow public bind without `MIMIC_API_TOKEN` (set when a reverse proxy / tailnet ACL handles auth upstream) |
 | `MIMIC_WYOMING_ENABLED` | `false` | `false` | Start the Wyoming TCP server alongside FastAPI (shared model in VRAM) |
 | `MIMIC_WYOMING_HOST` | `0.0.0.0` | `0.0.0.0` | Wyoming bind interface (inside the container — host firewall is the actual boundary) |
 | `MIMIC_WYOMING_PORT` | `10200` | `10200` | Wyoming TCP port |
+| `MIMIC_WYOMING_KEY` | unset (falls back to root) | unset (falls back to root) | Label of the key the Wyoming server synthesizes as, since the Wyoming protocol has no auth of its own |
 
 ## Endpoints
 
@@ -49,8 +52,15 @@ Form fields: `text`, `language`, `name`.
 Form fields: `text`, `language`, `ref_audio` (file), `ref_text`.
 Slower than register-then-call, but doesn't persist anything.
 
-### `GET /voices`, `GET /clone/voices`, `GET /health`
-JSON lists. `/health` is always unauthenticated.
+### `GET /voices`, `GET /clone/voices`, `GET /health`, `GET /me`
+`/voices` and `/clone/voices` are JSON lists (`/clone/voices` only lists
+voices visible to the caller — see [Multi-user access](#multi-user-access)).
+`/health` is always unauthenticated and deliberately uninformative: it
+returns only `{status, backend, stt_enabled}` and does **not** report
+`registered_voices` or loaded models, so it can't be used to enumerate
+voices anonymously. Use `GET /clone/voices` (authenticated) or `mimic
+clones` to see what's actually registered. `/me` returns the caller's own
+identity, role, quota, and today's usage.
 
 ### `POST /v1/audio/speech` — OpenAI-compatible
 JSON body matching OpenAI's TTS API:
@@ -90,6 +100,127 @@ and `MIMIC_API_TOKEN` is unset, the server refuses to start. This prevents
 the "oops I exposed it" scenario. If a reverse proxy / tailnet ACL is
 enforcing auth upstream and you really do want no app-level token, set
 `MIMIC_ALLOW_UNAUTHENTICATED_PUBLIC_BIND=1` explicitly.
+
+## Multi-user access
+
+The server supports more than one caller identity behind a single
+deployment: an admin mints a bearer key per person, each key owns its own
+voices, and voices can be shared narrowly (one named person) or broadly
+(anyone with a key) without ever handing out the underlying recording.
+
+### Key lifecycle
+
+`MIMIC_API_TOKEN` seeds the **root/admin key** (labeled `MIMIC_ROOT_LABEL`,
+default `root`) at every boot — see [Upgrading from
+single-token](#upgrading-from-single-token). From there, an admin manages
+everyone else's keys over HTTP:
+
+```
+POST   /admin/keys              mint a key; the token is returned ONCE, never again
+GET    /admin/keys              list keys: label, token prefix, role, state, usage
+PATCH  /admin/keys/{label}      adjust quotas, can_upload, enabled, role, expiry
+DELETE /admin/keys/{label}      revoke (soft: enabled=false, voices kept)
+DELETE /admin/keys/{label}?purge=true   revoke AND delete the key's voices/files
+GET    /admin/usage             usage rollups; ?key=, ?since=, ?limit= for raw events
+GET    /admin/voices            every voice on the server, with owner and grants
+GET    /me                      the caller's own identity, role, quota, usage today
+```
+
+Every minted key gets, unless overridden at mint time: `can_upload=true`,
+`max_voices=5`, `daily_char_quota=50000`, no expiry. Quota is enforced
+pre-flight on every synthesis call (character count) and on register
+(voice count); admin-role keys are exempt from both. The root key is
+special-cased against a handful of fields (`enabled`, `role`, `expires_at`)
+that would otherwise let someone lock themselves out with no in-band
+recovery path — it stays admin, enabled, and non-expiring no matter what a
+`PATCH` sends.
+
+### Visibility and grants
+
+Every voice is `private` at creation, owned by whoever registered it.
+Its owner (or an admin) can:
+
+- `PATCH /clone/voices/{name}` `{"visibility": "public"}` — anyone with a
+  key can now synthesize with it.
+- `POST /clone/voices/{name}/grants` `{"grantee": "<label>"}` — that one
+  key, specifically, can now synthesize with it, regardless of visibility.
+- `DELETE /clone/voices/{name}/grants/{label}` — revoke that grant.
+
+An admin key can see, synthesize with, grant, and delete *any* voice on the
+server, not just its own.
+
+A voice that is neither public nor granted to you does not exist as far as
+you can tell: every route resolves it to `404 voice_not_found`, never `403`
+— a caller must not be able to distinguish "no such voice" from "a voice
+you can't touch" by probing names.
+
+### Name resolution: bare vs. qualified
+
+A voice name in a request is either bare (`"warm"`) or qualified
+(`"dave/warm"`). Resolution order for a bare name:
+
+1. A backend built-in voice (e.g. `default`) always wins first.
+2. A voice you own by that name.
+3. Exactly one voice visible to you (public, or granted to you) by that
+   name — if more than one candidate matches, the server returns `409
+   ambiguous_voice` listing the qualified candidates instead of guessing.
+
+So the owner's existing `mimic clone say jim` keeps working unchanged, and
+a friend who's been granted access says `jim/piper` (the qualified form)
+for a voice that isn't theirs.
+
+### Reference audio is never downloadable
+
+No endpoint — including every `/admin/*` route — returns the bytes of a
+voice's `audio.wav` or its `text.txt` transcript, to any caller, for any
+reason. Sharing a voice grants "synthesize with it," never "receive the
+recording." This is treated as a hard invariant with a dedicated
+regression test (`test_reference_audio_is_never_downloadable`).
+
+### Wyoming and multi-user
+
+The Wyoming protocol has no per-request authentication, so it runs as one
+fixed identity: `MIMIC_WYOMING_KEY=<label>` if set, otherwise the root/admin
+key with a startup warning. All Wyoming requests are synthesized and
+quota-tracked under that one key's permissions.
+
+## Upgrading from single-token
+
+Deployments already running the single-shared-token version of this server
+upgrade in place — no separate migration step to run by hand — but the
+first boot on this version changes things on disk, so **back up your data
+volume before starting the new image**:
+
+```bash
+docker run --rm -v mimic-data:/data -v "$PWD":/backup alpine \
+  tar czf /backup/mimic-data-backup.tar.gz -C /data .
+```
+
+On first boot:
+
+1. A SQLite database is created at `MIMIC_DB_PATH` (`/data/mimic.db` in
+   Docker) inside the same data volume.
+2. `MIMIC_API_TOKEN` is seeded as the admin key, labeled `MIMIC_ROOT_LABEL`
+   (default `root`) — it keeps working exactly as before for every request
+   you were already making.
+3. Every voice that used to live flat at `reference/<name>/` is **adopted**
+   by the root key and **moved** to `reference/<root-label>/<name>/`. Your
+   existing `mimic clone say <name>` calls keep working unchanged, because
+   bare names still resolve to voices you own first.
+
+After the first boot, check `ls -a` on the reference directory. Two
+special, dot-prefixed directories mean the migration preserved data it
+couldn't place automatically and it needs a manual look — nothing was
+deleted, but nothing was silently guessed either:
+
+- `.migrate-staging` — voices that were mid-move when the process was
+  interrupted; they finish installing on the next boot. If it's still
+  there after a clean boot, something about its contents didn't validate
+  (check the server log for the specific voice name).
+- `.conflict-<name>` (or `.conflict-<name>-1`, `-2`, ...) — a legacy voice
+  whose adopted destination already existed with *different* content
+  (different `audio.wav` or `text.txt`). Both copies are kept; compare them
+  and decide by hand which one to keep as `reference/<root-label>/<name>/`.
 
 ## Wyoming protocol (Home Assistant voice pipeline)
 

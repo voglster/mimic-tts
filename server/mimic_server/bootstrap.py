@@ -194,6 +194,7 @@ def _install_one(reference_dir: Path, staged: Path, root: Key, registry: VoiceRe
 
     destination.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(staged), str(destination))
+    logger.info("adopted legacy voice %r as %s/%s", staged.name, root.label, staged.name)
 
 
 def _reconcile_owner_dir(reference_dir: Path, root: Key, registry: VoiceRegistry) -> None:

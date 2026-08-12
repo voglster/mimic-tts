@@ -182,7 +182,7 @@ def test_openai_speech_still_prefers_the_builtin_named_default(env, fake_backend
 def test_register_rejects_a_name_that_collides_with_a_builtin_voice(env):
     client, tokens, _ = env
     r = _register(client, tokens, "dave", "default")
-    assert r.status_code == 400
+    assert r.status_code == 409
     assert r.json()["error"] == "reserved_name"
 
 

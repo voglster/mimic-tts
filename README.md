@@ -8,6 +8,8 @@ ships with a tiny Python client, never sends a recording off your machine.
   library (sync **and** async).
 - Voice cloning — zero-shot from a ~10-second reference clip.
 - Optional bearer auth — single env var flips it on.
+- Multi-user key management — mint/revoke per-user API keys, each with its
+  own voice ownership, visibility (private/public), and per-voice grants.
 - Backend abstraction (`MIMIC_BACKEND`) — engine is swappable behind a
   small protocol; today ships Chatterbox, easy to add others.
 - OpenAI-compatible `/v1/audio/speech` for HA `sfortis/openai_tts`,
@@ -79,11 +81,15 @@ async with AsyncClient() as c:
 | `POST` | `/clone/oneshot`    | Clone + synthesize in one call              |
 | `POST` | `/v1/audio/speech`  | OpenAI-compatible TTS (drop-in for HA `sfortis/openai_tts`) |
 | `GET`  | `/voices`           | List built-in voices                        |
-| `GET`  | `/clone/voices`     | List registered clone voices                |
-| `GET`  | `/health`           | Loaded models + registered voices (always open) |
+| `GET`  | `/clone/voices`     | List clone voices visible to the caller     |
+| `GET`  | `/me`               | The caller's own identity, quota, and usage |
+| `GET`, `POST`, `PATCH`, `DELETE` | `/admin/*` | Key management, server-wide usage and voices (admin only) |
+| `GET`  | `/health`           | Bare liveness check — status/backend/stt_enabled only, always open |
 
 Set `MIMIC_API_TOKEN=...` to require `Authorization: Bearer ...` on every
-endpoint except `/health`. Off by default.
+endpoint except `/health`; it becomes the admin key. See
+[Multi-user access](docs/server.md#multi-user-access) for key lifecycle,
+visibility, and grants.
 
 ## Built-in voices
 

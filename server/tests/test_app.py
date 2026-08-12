@@ -1,4 +1,7 @@
 import io
+import os
+import subprocess
+import sys
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -367,3 +370,21 @@ def test_public_bind_override_warns_admin_routes_unavailable(tmp_path, fake_back
     with caplog.at_level("WARNING"):
         build_app(settings, backend_factory=lambda _s: fake_backend)
     assert "admin" in caplog.text.lower()
+
+
+def test_importing_app_module_runs_no_migration(tmp_path):
+    """A bare `import mimic_server.app` must not touch disk: no DB file, no
+    reference dir, no moved voice files. Only accessing the `app` attribute
+    (as `uvicorn mimic_server.app:app` and the console entry both do) may
+    trigger `build_app`. Runs in a subprocess because a same-process import
+    would hit `sys.modules` and skip the module body entirely, proving
+    nothing about a fresh interpreter's behavior."""
+    data_dir = tmp_path / "data"
+    env = {**os.environ, "MIMIC_DATA_DIR": str(data_dir), "MIMIC_API_TOKEN": "tok"}
+    subprocess.run(
+        [sys.executable, "-c", "import mimic_server.app"],
+        check=True,
+        env=env,
+        timeout=30,
+    )
+    assert not data_dir.exists()

@@ -141,5 +141,25 @@ def _mount_web_ui(app: FastAPI) -> None:
     logger.info("serving web UI from %s", dist_path)
 
 
-# Default app for `uvicorn mimic_server.app:app` and the console entry.
-app = build_app(Settings())
+_lazy_app: FastAPI | None = None
+
+
+def __getattr__(name: str) -> Any:
+    """Lazily build the default app on first access of `mimic_server.app.app`.
+
+    `uvicorn mimic_server.app:app` and the `mimic-server` console entry both
+    resolve `app` via attribute access on this module, so PEP 562's
+    module-level `__getattr__` keeps both working unchanged while making a
+    bare `import mimic_server.app` a no-op. Building it eagerly at import
+    time — the previous behavior — ran the full bootstrap migration (opened
+    the DB, seeded the root key, moved voice files) as a side effect of
+    merely importing the module, which broke anything that imports this
+    module without intending to serve, e.g. `python -c "import
+    mimic_server.app"` or a test collecting this file.
+    """
+    if name != "app":
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    global _lazy_app
+    if _lazy_app is None:
+        _lazy_app = build_app(Settings())
+    return _lazy_app

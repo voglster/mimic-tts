@@ -10,7 +10,26 @@ services:
       - mimic-data:/data
     environment:
       MIMIC_LOG_LEVEL: INFO
-      # MIMIC_API_TOKEN: change-me   # uncomment to require bearer auth
+      # MIMIC_API_TOKEN: change-me   # uncomment to require bearer auth.
+      # This becomes the admin key on first boot (see docs/server.md#multi-
+      # user-access) -- back up the data volume before changing it on an
+      # existing deployment.
+      #
+      # Label the admin/root key. Defaults to "root". Existing single-token
+      # deployments adopt their pre-multi-user voices under
+      # reference/<this-label>/ the first time they boot on this version.
+      # MIMIC_ROOT_LABEL: root
+      #
+      # Identity the Wyoming protocol server (no in-band auth of its own)
+      # runs requests as. Must name an existing key label; unset uses the
+      # root/admin key. Only relevant with MIMIC_WYOMING_ENABLED=true below.
+      # MIMIC_WYOMING_KEY: ha-voice
+      #
+      # Where the multi-user SQLite DB (keys, voice ownership, usage) lives.
+      # Defaults under MIMIC_DATA_DIR, so it already persists in the
+      # mimic-data volume below -- override only to relocate it.
+      # MIMIC_DB_PATH: /data/mimic.db
+      #
       # Optional: forward /stt to a Wyoming ASR server (e.g. wyoming-faster-
       # whisper). Requires `extra_hosts` below so the container can reach
       # services published on the host.

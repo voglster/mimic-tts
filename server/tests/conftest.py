@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import itertools
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -76,3 +77,31 @@ def _register(client, tokens, who, name):
         data={"name": name, "ref_text": "hello"},
         files={"ref_audio": ("a.wav", _wav(), "audio/wav")},
     )
+
+
+@pytest.fixture
+def matrix_env(tmp_path_factory, fake_backend):
+    """Factory fixture for the authorization matrix: each call builds a
+    brand-new app, DB, and reference dir, so a destructive verb exercised by
+    one (case, actor) combination can never leak state into another. `dave`
+    owns a private voice `warm`; `erin` has no relationship to it.
+    """
+    build_count = itertools.count()
+
+    def _build() -> tuple[TestClient, dict[str, str]]:
+        root = tmp_path_factory.mktemp(f"matrix-{next(build_count)}")
+        settings = Settings(
+            reference_dir=root / "reference",
+            db_path=root / "mimic.db",
+            api_token="root-token",  # noqa: S106
+        )
+        app = build_app(settings, backend_factory=lambda _s: fake_backend)
+        client = TestClient(app)
+        keys = bootstrap(settings).keys
+        _, dave = keys.create("dave")
+        _, erin = keys.create("erin")
+        tokens = {"root": "root-token", "dave": dave, "erin": erin}
+        _register(client, tokens, "dave", "warm")
+        return client, tokens
+
+    return _build
