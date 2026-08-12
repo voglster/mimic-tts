@@ -17,6 +17,9 @@ from typing import Any
 
 import pytest
 from conftest import _wav
+from mimic_server.app import build_app
+from mimic_server.config import Settings
+from starlette.routing import Mount
 
 ANONYMOUS, OWNER, OTHER, ADMIN = "anonymous", "dave", "erin", "root"
 
@@ -172,11 +175,26 @@ _TEMPLATE_FOR_CASE_PATH: dict[str, str] = {
 }
 
 
+# The web UI, when MIMIC_WEB_DIST is set, is mounted as a Starlette `Mount`
+# rather than a route with `.methods` -- `getattr(route, "methods", ())`
+# below would silently skip it and any future mount, which would slip
+# straight past a check whose whole point is "no endpoint ships unaudited."
+_ALLOWED_MOUNT_NAMES = frozenset({"web"})
+
+
 def test_matrix_covers_every_route(matrix_env):
     """Fail loudly if a route gets added/removed without updating `CASES` --
     the whole point of this file is that no endpoint ships unaudited."""
     client, _tokens = matrix_env()
     app = client.app
+
+    mounts = [route for route in app.routes if isinstance(route, Mount)]
+    unexpected = [m for m in mounts if m.name not in _ALLOWED_MOUNT_NAMES]
+    assert not unexpected, (
+        f"unaudited mount(s) not covered by the authorization matrix: "
+        f"{[(m.name, m.path) for m in unexpected]}"
+    )
+
     registered = {
         (method, route.path)
         for route in app.routes
@@ -188,3 +206,27 @@ def test_matrix_covers_every_route(matrix_env):
         for method, path, _kind, _expected in CASES
     }
     assert covered == registered
+
+
+def test_web_ui_mount_is_allowlisted_not_unaudited(tmp_path, fake_backend):
+    """A real MIMIC_WEB_DIST mount must not trip the "unaudited mount"
+    guard -- it's the one Mount this app is expected to register."""
+    settings = Settings(
+        reference_dir=tmp_path / "reference",
+        db_path=tmp_path / "mimic.db",
+        api_token="root-token",  # noqa: S106
+    )
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setenv("MIMIC_WEB_DIST", str(tmp_path))
+        app = build_app(settings, backend_factory=lambda _s: fake_backend)
+    mounts = [route for route in app.routes if isinstance(route, Mount)]
+    assert any(m.name == "web" for m in mounts)
+    assert all(m.name in _ALLOWED_MOUNT_NAMES for m in mounts)
+
+
+def test_unexpected_mount_name_is_not_allowlisted():
+    """Direct check on the guard's allowlist: a differently-named mount
+    (e.g. something added later that serves files from disk) is exactly
+    what `test_matrix_covers_every_route` is meant to catch."""
+    rogue = Mount("/rogue", app=lambda *_args: None, name="rogue-static-dump")
+    assert rogue.name not in _ALLOWED_MOUNT_NAMES

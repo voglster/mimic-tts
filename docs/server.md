@@ -121,6 +121,10 @@ GET    /admin/keys              list keys: label, token prefix, role, state, usa
 PATCH  /admin/keys/{label}      adjust quotas, can_upload, enabled, role, expiry
 DELETE /admin/keys/{label}      revoke (soft: enabled=false, voices kept)
 DELETE /admin/keys/{label}?purge=true   revoke AND delete the key's voices/files
+                                 (the root/admin key can never be revoked or
+                                 purged this way, with or without ?purge= --
+                                 it is the recovery path if every other admin
+                                 key is lost, and every request for it is a 403)
 GET    /admin/usage             usage rollups; ?key=, ?since=, ?limit= for raw events
 GET    /admin/voices            every voice on the server, with owner and grants
 GET    /me                      the caller's own identity, role, quota, usage today
@@ -169,6 +173,16 @@ So the owner's existing `mimic clone say jim` keeps working unchanged, and
 a friend who's been granted access says `jim/piper` (the qualified form)
 for a voice that isn't theirs.
 
+**Exception: `POST /clone/tts` checks the clone registry *before* built-ins**
+(it passes `prefer_clone=True` to the shared resolver). Every other
+synthesis route — `/tts`, `/v1/audio/speech` — follows the built-in-first
+order above. This matters if you ever register a clone with the same name
+as a built-in voice (e.g. `default`): `/clone/tts` reaches your clone,
+while `/tts` and `/v1/audio/speech` still reach the built-in. (This is also
+why `POST /clone/register` rejects registering a clone literally named
+after a built-in voice — see `reserved_name`, `409` — the ambiguity is
+worth refusing at registration time rather than surprising a caller later.)
+
 ### Reference audio is never downloadable
 
 No endpoint — including every `/admin/*` route — returns the bytes of a
@@ -180,9 +194,11 @@ regression test (`test_reference_audio_is_never_downloadable`).
 ### Wyoming and multi-user
 
 The Wyoming protocol has no per-request authentication, so it runs as one
-fixed identity: `MIMIC_WYOMING_KEY=<label>` if set, otherwise the root/admin
-key with a startup warning. All Wyoming requests are synthesized and
-quota-tracked under that one key's permissions.
+fixed identity: `MIMIC_WYOMING_KEY=<label>` if set, otherwise the
+root/admin key (logged at `info` level as the expected default, not a
+warning). A `MIMIC_WYOMING_KEY` that names a key which doesn't actually
+exist **does** log a warning and falls back to root. All Wyoming requests
+are synthesized and quota-tracked under that one key's permissions.
 
 ## Upgrading from single-token
 
