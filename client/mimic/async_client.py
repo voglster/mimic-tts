@@ -52,6 +52,7 @@ class AsyncClient:
             headers=spec.headers,
             data=spec.data,
             files=spec.files,
+            json=spec.json,
         )
         raise_for_response(r)
         return r.json()
@@ -70,6 +71,7 @@ class AsyncClient:
             headers=spec.headers,
             data=spec.data,
             files=spec.files,
+            json=spec.json,
         )
         raise_for_response(r)
         return r.content

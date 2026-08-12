@@ -1,7 +1,13 @@
 import httpx
 import pytest
 from mimic._base import RequestSpec, build_request_spec, raise_for_response
-from mimic.errors import MimicAPIError, MimicAuthError, MimicNotFoundError
+from mimic.errors import (
+    MimicAPIError,
+    MimicAuthError,
+    MimicForbiddenError,
+    MimicNotFoundError,
+    MimicQuotaError,
+)
 
 
 def test_build_get_request_no_auth():
@@ -88,3 +94,47 @@ def test_raise_for_response_2xx_does_nothing():
 def test_request_spec_is_a_dataclass():
     spec = RequestSpec(method="GET", url="http://x/y", headers={}, data=None, files=None)
     assert spec.method == "GET"
+
+
+def test_spec_carries_a_json_body():
+    spec = build_request_spec(
+        base_url="http://x",
+        method="POST",
+        path="/admin/keys",
+        token="t",  # noqa: S106
+        json={"label": "dave"},
+    )
+    assert spec.json == {"label": "dave"}
+    assert spec.data is None
+
+
+def test_403_raises_forbidden():
+    response = httpx.Response(403, json={"error": "forbidden", "detail": "admin key required"})
+    with pytest.raises(MimicForbiddenError) as exc:
+        raise_for_response(response)
+    assert "admin key required" in str(exc.value)
+
+
+def test_429_raises_quota_error_with_fields():
+    response = httpx.Response(
+        429,
+        json={
+            "error": "quota_exceeded",
+            "detail": "daily character quota exceeded (95/100)",
+            "used": 95,
+            "limit": 100,
+            "resets_at": "2026-08-12T00:00:00+00:00",
+        },
+    )
+    with pytest.raises(MimicQuotaError) as exc:
+        raise_for_response(response)
+    assert (exc.value.used, exc.value.limit) == (95, 100)
+    assert exc.value.resets_at.startswith("2026-08-12")
+
+
+def test_error_detail_reads_the_new_error_shape():
+    """The server returns {"error", "detail"}; older routes returned {"detail"}."""
+    response = httpx.Response(404, json={"error": "voice_not_found", "detail": "no voice 'x'"})
+    with pytest.raises(MimicNotFoundError) as exc:
+        raise_for_response(response)
+    assert "no voice 'x'" in str(exc.value)

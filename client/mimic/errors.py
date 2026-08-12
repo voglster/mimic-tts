@@ -26,3 +26,25 @@ class MimicNotFoundError(MimicAPIError):
 
 class MimicValidationError(MimicAPIError):
     """4xx other than 401/404: request was rejected as invalid."""
+
+
+class MimicForbiddenError(MimicAPIError):
+    """403: the key authenticated but is not allowed to do this."""
+
+
+class MimicQuotaError(MimicAPIError):
+    """429: the key's daily character quota is exhausted."""
+
+    def __init__(
+        self,
+        status_code: int,
+        message: str,
+        *,
+        used: int = 0,
+        limit: int = 0,
+        resets_at: str = "",
+    ) -> None:
+        super().__init__(status_code, message)
+        self.used = used
+        self.limit = limit
+        self.resets_at = resets_at

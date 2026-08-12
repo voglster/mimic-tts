@@ -11,7 +11,9 @@ if TYPE_CHECKING:
 from mimic.errors import (
     MimicAPIError,
     MimicAuthError,
+    MimicForbiddenError,
     MimicNotFoundError,
+    MimicQuotaError,
     MimicValidationError,
 )
 
@@ -23,6 +25,7 @@ class RequestSpec:
     headers: dict[str, str] = field(default_factory=dict)
     data: dict[str, Any] | None = None
     files: dict[str, Any] | None = None
+    json: dict[str, Any] | None = None
 
 
 def build_request_spec(
@@ -33,6 +36,7 @@ def build_request_spec(
     token: str | None,
     data: dict[str, Any] | None = None,
     files: dict[str, Any] | None = None,
+    json: dict[str, Any] | None = None,
 ) -> RequestSpec:
     if not path.startswith("/"):
         raise ValueError(f"path must start with '/': {path!r}")
@@ -40,27 +44,36 @@ def build_request_spec(
     headers: dict[str, str] = {}
     if token is not None:
         headers["Authorization"] = f"Bearer {token}"
-    return RequestSpec(method=method, url=url, headers=headers, data=data, files=files)
+    return RequestSpec(method=method, url=url, headers=headers, data=data, files=files, json=json)
 
 
-def _extract_detail(response: httpx.Response) -> str:
+def _body(response: httpx.Response) -> dict[str, Any]:
     try:
         body = response.json()
-        if isinstance(body, dict) and "detail" in body:
-            return str(body["detail"])
-    except Exception:  # noqa: S110
-        pass
-    return response.text or response.reason_phrase or ""
+    except Exception:
+        return {}
+    return body if isinstance(body, dict) else {}
 
 
 def raise_for_response(response: httpx.Response) -> None:
     if response.status_code < 400:
         return
-    detail = _extract_detail(response)
+    body = _body(response)
+    detail = str(body.get("detail") or response.text or response.reason_phrase or "")
     if response.status_code == 401:
         raise MimicAuthError(response.status_code, detail)
+    if response.status_code == 403:
+        raise MimicForbiddenError(response.status_code, detail)
     if response.status_code == 404:
         raise MimicNotFoundError(response.status_code, detail)
+    if response.status_code == 429:
+        raise MimicQuotaError(
+            response.status_code,
+            detail,
+            used=int(body.get("used", 0)),
+            limit=int(body.get("limit", 0)),
+            resets_at=str(body.get("resets_at", "")),
+        )
     if 400 <= response.status_code < 500:
         raise MimicValidationError(response.status_code, detail)
     raise MimicAPIError(response.status_code, detail)

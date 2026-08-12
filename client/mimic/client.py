@@ -46,7 +46,12 @@ class Client:
             **kwargs,
         )
         r = self._http.request(
-            spec.method, spec.url, headers=spec.headers, data=spec.data, files=spec.files
+            spec.method,
+            spec.url,
+            headers=spec.headers,
+            data=spec.data,
+            files=spec.files,
+            json=spec.json,
         )
         raise_for_response(r)
         return r.json()
@@ -60,7 +65,12 @@ class Client:
             **kwargs,
         )
         r = self._http.request(
-            spec.method, spec.url, headers=spec.headers, data=spec.data, files=spec.files
+            spec.method,
+            spec.url,
+            headers=spec.headers,
+            data=spec.data,
+            files=spec.files,
+            json=spec.json,
         )
         raise_for_response(r)
         return r.content
