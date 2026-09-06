@@ -3,9 +3,11 @@ from unittest.mock import MagicMock, patch
 import pytest
 from mimic.cli import app
 from mimic.errors import (
+    MimicConnectionError,
     MimicForbiddenError,
     MimicNotFoundError,
     MimicQuotaError,
+    MimicTimeoutError,
     MimicValidationError,
 )
 from typer.testing import CliRunner
@@ -458,3 +460,44 @@ def test_unshare_revokes(runner, monkeypatch):
     stub = _stub_client(monkeypatch)
     assert runner.invoke(app, ["unshare", "warm", "--from", "dave"]).exit_code == 0
     assert stub.calls == [("revoke_voice_grant", "warm", "dave")]
+
+
+def test_say_unreachable_server_prints_actionable_message(runner, monkeypatch, tmp_path):
+    (tmp_path / "config.toml").write_text('server_url = "https://tts.example.com"\n')
+    _stub_client(
+        monkeypatch,
+        say_raises=MimicConnectionError("https://tts.example.com", "connection refused"),
+    )
+    result = runner.invoke(app, ["say", "hello"])
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    assert "https://tts.example.com" in result.stderr
+    assert "connection refused" in result.stderr
+    assert "server_url" in result.stderr
+    assert str(tmp_path / "config.toml") in result.stderr
+
+
+def test_say_unreachable_without_config_file_explains_the_default(runner, monkeypatch, tmp_path):
+    _stub_client(
+        monkeypatch,
+        say_raises=MimicConnectionError("http://localhost:8000", "connection refused"),
+    )
+    result = runner.invoke(app, ["say", "hello"])
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    assert "no config file" in result.stderr.lower()
+    assert str(tmp_path / "config.toml") in result.stderr
+    assert "MIMIC_SERVER_URL" in result.stderr
+
+
+def test_say_timeout_names_the_timeout(runner, monkeypatch, tmp_path):
+    (tmp_path / "config.toml").write_text('server_url = "https://tts.example.com"\n')
+    _stub_client(
+        monkeypatch,
+        say_raises=MimicTimeoutError("https://tts.example.com", "timed out waiting for a response"),
+    )
+    result = runner.invoke(app, ["say", "hello"])
+    assert result.exit_code == 1
+    assert "Traceback" not in result.output
+    assert "timed out" in result.stderr.lower()
+    assert "https://tts.example.com" in result.stderr

@@ -15,13 +15,15 @@ if TYPE_CHECKING:
 
 from mimic.admin_cli import admin_app
 from mimic.client import Client
-from mimic.config import load_config
+from mimic.config import config_file, load_config
 from mimic.errors import (
     MimicAPIError,
     MimicAuthError,
+    MimicConnectionError,
     MimicForbiddenError,
     MimicNotFoundError,
     MimicQuotaError,
+    MimicTimeoutError,
     MimicValidationError,
 )
 from mimic.recorder import (
@@ -59,35 +61,73 @@ def _format_validation_error(e: MimicValidationError) -> str:
     return e.message
 
 
-def _run[T](action: Callable[[], T]) -> T:
-    """Turn API errors into a one-line message and a non-zero exit.
+def _connection_lines(e: MimicConnectionError) -> list[str]:
+    """Explain an unreachable server in terms of what to do about it.
 
-    A traceback is the wrong output for 'your friend's key ran out of quota'.
+    The common cases are a server that is down, a typo'd `server_url`, and a
+    fresh machine with no config at all — where the URL in the message is a
+    default the user never chose, which is confusing unless we say so.
     """
-    try:
-        return action()
-    except MimicQuotaError as e:
+    if isinstance(e, MimicTimeoutError):
+        return [
+            f"timed out waiting for mimic server at {e.server_url}",
+            "it may be busy loading a model — try again in a moment",
+        ]
+
+    path = config_file()
+    lines = [f"cannot reach mimic server at {e.server_url}", f"  {e.reason}", ""]
+    if path.exists():
+        lines += [
+            "check that the server is up and that `server_url` is right in",
+            f"  {path}",
+            f"then try:  curl {e.server_url.rstrip('/')}/health",
+        ]
+    else:
+        lines += [
+            f"no config file at {path}, so that URL is just the built-in default.",
+            "create it with:",
+            "",
+            '  server_url = "https://your-server.example"',
+            '  token = "your-api-token"',
+            "",
+            "or set MIMIC_SERVER_URL and MIMIC_API_TOKEN for a single command.",
+        ]
+    return lines
+
+
+def _api_error_lines(e: MimicAPIError) -> list[str]:
+    """One readable line (or two) for a server that answered with a refusal."""
+    if isinstance(e, MimicQuotaError):
         message = f"quota exceeded: {e.used:,} / {e.limit:,} characters today"
         if e.resets_at:
             message += f" (resets at {e.resets_at})"
-        typer.echo(message, err=True)
-        raise typer.Exit(1) from e
-    except MimicForbiddenError as e:
-        typer.echo(f"not permitted: {e.message}", err=True)
-        raise typer.Exit(1) from e
-    except MimicAuthError as e:
-        typer.echo(f"authentication failed: {e.message}", err=True)
-        typer.echo("check `token` in ~/.config/mimic/config.toml", err=True)
-        raise typer.Exit(1) from e
-    except MimicNotFoundError as e:
-        typer.echo(f"not found: {e.message}", err=True)
-        raise typer.Exit(1) from e
-    except MimicValidationError as e:
-        typer.echo(f"invalid request: {_format_validation_error(e)}", err=True)
-        raise typer.Exit(1) from e
+        return [message]
+    if isinstance(e, MimicForbiddenError):
+        return [f"not permitted: {e.message}"]
+    if isinstance(e, MimicAuthError):
+        return [f"authentication failed: {e.message}", f"check `token` in {config_file()}"]
+    if isinstance(e, MimicNotFoundError):
+        return [f"not found: {e.message}"]
+    if isinstance(e, MimicValidationError):
+        return [f"invalid request: {_format_validation_error(e)}"]
+    return [f"error: {e.message}"]
+
+
+def _run[T](action: Callable[[], T]) -> T:
+    """Turn client errors into a readable message and a non-zero exit.
+
+    A traceback is the wrong output for 'your friend's key ran out of quota',
+    and equally wrong for 'the server is not running'.
+    """
+    try:
+        return action()
+    except MimicConnectionError as e:
+        lines = _connection_lines(e)
     except MimicAPIError as e:
-        typer.echo(f"error: {e.message}", err=True)
-        raise typer.Exit(1) from e
+        lines = _api_error_lines(e)
+    for line in lines:
+        typer.echo(line, err=True)
+    raise typer.Exit(1)
 
 
 def _client() -> Client:

@@ -12,7 +12,7 @@ import httpx
 if TYPE_CHECKING:
     from io import BufferedReader
 
-from mimic._base import build_request_spec, raise_for_response
+from mimic._base import build_request_spec, map_transport_errors, raise_for_response
 from mimic.client import _as_upload
 
 
@@ -47,14 +47,15 @@ class AsyncClient:
             token=self._token,
             **kwargs,
         )
-        r = await self._http.request(
-            spec.method,
-            spec.url,
-            headers=spec.headers,
-            data=spec.data,
-            files=spec.files,
-            json=spec.json,
-        )
+        with map_transport_errors(self._base_url):
+            r = await self._http.request(
+                spec.method,
+                spec.url,
+                headers=spec.headers,
+                data=spec.data,
+                files=spec.files,
+                json=spec.json,
+            )
         raise_for_response(r)
         return r.json()
 
@@ -66,14 +67,15 @@ class AsyncClient:
             token=self._token,
             **kwargs,
         )
-        r = await self._http.request(
-            spec.method,
-            spec.url,
-            headers=spec.headers,
-            data=spec.data,
-            files=spec.files,
-            json=spec.json,
-        )
+        with map_transport_errors(self._base_url):
+            r = await self._http.request(
+                spec.method,
+                spec.url,
+                headers=spec.headers,
+                data=spec.data,
+                files=spec.files,
+                json=spec.json,
+            )
         raise_for_response(r)
         return r.content
 

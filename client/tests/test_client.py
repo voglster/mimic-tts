@@ -3,7 +3,7 @@ import json
 import httpx
 import pytest
 from mimic import Client
-from mimic.errors import MimicAuthError
+from mimic.errors import MimicAuthError, MimicConnectionError, MimicTimeoutError
 
 
 def _wav_bytes() -> bytes:
@@ -337,3 +337,41 @@ def test_create_key_sends_json_body_through_the_transport():
     c.create_key("dave", role="admin")
     assert seen["content_type"].startswith("application/json")
     assert seen["body"] == {"label": "dave", "role": "admin"}
+
+
+def _failing_client(exc: Exception) -> Client:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise exc
+
+    return Client(
+        server_url="https://tts.example.com",
+        transport=httpx.MockTransport(handler),
+    )
+
+
+def test_connect_error_becomes_mimic_connection_error():
+    client = _failing_client(httpx.ConnectError("[Errno 111] Connection refused"))
+    with pytest.raises(MimicConnectionError) as excinfo:
+        client.health()
+    assert excinfo.value.server_url == "https://tts.example.com"
+    assert excinfo.value.reason == "connection refused"
+
+
+def test_unknown_host_reports_dns_failure():
+    client = _failing_client(httpx.ConnectError("[Errno -2] Name or service not known"))
+    with pytest.raises(MimicConnectionError) as excinfo:
+        client.health()
+    assert "unknown host" in excinfo.value.reason
+
+
+def test_timeout_becomes_mimic_timeout_error():
+    client = _failing_client(httpx.ConnectTimeout("timed out"))
+    with pytest.raises(MimicTimeoutError) as excinfo:
+        client.health()
+    assert isinstance(excinfo.value, MimicConnectionError)
+
+
+def test_audio_requests_also_translate_transport_errors():
+    client = _failing_client(httpx.ConnectError("[Errno 111] Connection refused"))
+    with pytest.raises(MimicConnectionError):
+        client.tts("hello")

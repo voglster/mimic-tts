@@ -3,7 +3,7 @@ import json
 import httpx
 import pytest
 from mimic import AsyncClient
-from mimic.errors import MimicAuthError
+from mimic.errors import MimicAuthError, MimicConnectionError
 
 
 def _wav_bytes() -> bytes:
@@ -287,3 +287,25 @@ async def test_create_key_sends_json_body_through_the_transport():
         await c.create_key("dave", role="admin")
     assert seen["content_type"].startswith("application/json")
     assert seen["body"] == {"label": "dave", "role": "admin"}
+
+
+async def test_async_connect_error_becomes_mimic_connection_error():
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("[Errno 111] Connection refused")
+
+    mt = httpx.MockTransport(handler)
+    async with AsyncClient(server_url="https://tts.example.com", transport=mt) as c:
+        with pytest.raises(MimicConnectionError) as excinfo:
+            await c.health()
+    assert excinfo.value.server_url == "https://tts.example.com"
+    assert excinfo.value.reason == "connection refused"
+
+
+async def test_async_audio_requests_also_translate_transport_errors():
+    def handler(_request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("[Errno 111] Connection refused")
+
+    mt = httpx.MockTransport(handler)
+    async with AsyncClient(server_url="https://tts.example.com", transport=mt) as c:
+        with pytest.raises(MimicConnectionError):
+            await c.tts("hello")

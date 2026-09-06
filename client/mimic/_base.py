@@ -2,20 +2,28 @@
 
 from __future__ import annotations
 
+import re
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
+import httpx
+
 if TYPE_CHECKING:
-    import httpx
+    from collections.abc import Iterator
 
 from mimic.errors import (
     MimicAPIError,
     MimicAuthError,
+    MimicConnectionError,
     MimicForbiddenError,
     MimicNotFoundError,
     MimicQuotaError,
+    MimicTimeoutError,
     MimicValidationError,
 )
+
+_DNS_MARKERS = ("name or service not known", "nodename nor servname", "temporary failure in name")
 
 
 @dataclass
@@ -78,3 +86,34 @@ def raise_for_response(response: httpx.Response) -> None:
     if 400 <= response.status_code < 500:
         raise MimicValidationError(response.status_code, detail, body=body)
     raise MimicAPIError(response.status_code, detail, body=body)
+
+
+def _connect_reason(exc: httpx.TransportError) -> str:
+    """Phrase a transport failure the way a person would describe it.
+
+    httpx surfaces the OS error verbatim ("[Errno 111] Connection refused"),
+    which is noise to anyone who is not debugging sockets.
+    """
+    raw = str(exc).strip()
+    lowered = raw.lower()
+    if any(marker in lowered for marker in _DNS_MARKERS):
+        return "unknown host (DNS lookup failed)"
+    if "certificate" in lowered or "ssl" in lowered:
+        return f"TLS handshake failed: {raw}"
+    without_errno = re.sub(r"^\[Errno -?\d+\]\s*", "", raw)
+    return (without_errno or "connection failed").lower()
+
+
+@contextmanager
+def map_transport_errors(server_url: str) -> Iterator[None]:
+    """Translate httpx transport failures into the mimic error hierarchy.
+
+    Callers of this library should never have to catch an httpx exception to
+    handle "the server is down".
+    """
+    try:
+        yield
+    except httpx.TimeoutException as e:
+        raise MimicTimeoutError(server_url, "timed out waiting for a response") from e
+    except httpx.TransportError as e:
+        raise MimicConnectionError(server_url, _connect_reason(e)) from e

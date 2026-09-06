@@ -12,7 +12,7 @@ if TYPE_CHECKING:
 
 import httpx
 
-from mimic._base import build_request_spec, raise_for_response
+from mimic._base import build_request_spec, map_transport_errors, raise_for_response
 
 
 class Client:
@@ -46,14 +46,15 @@ class Client:
             token=self._token,
             **kwargs,
         )
-        r = self._http.request(
-            spec.method,
-            spec.url,
-            headers=spec.headers,
-            data=spec.data,
-            files=spec.files,
-            json=spec.json,
-        )
+        with map_transport_errors(self._base_url):
+            r = self._http.request(
+                spec.method,
+                spec.url,
+                headers=spec.headers,
+                data=spec.data,
+                files=spec.files,
+                json=spec.json,
+            )
         raise_for_response(r)
         return r.json()
 
@@ -65,14 +66,15 @@ class Client:
             token=self._token,
             **kwargs,
         )
-        r = self._http.request(
-            spec.method,
-            spec.url,
-            headers=spec.headers,
-            data=spec.data,
-            files=spec.files,
-            json=spec.json,
-        )
+        with map_transport_errors(self._base_url):
+            r = self._http.request(
+                spec.method,
+                spec.url,
+                headers=spec.headers,
+                data=spec.data,
+                files=spec.files,
+                json=spec.json,
+            )
         raise_for_response(r)
         return r.content
 

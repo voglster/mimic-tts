@@ -29,8 +29,13 @@ def _config_dir() -> Path:
     return user_config_path("mimic", appauthor=False)
 
 
+def config_file(config_dir: Path | None = None) -> Path:
+    """Where the client looks for its TOML config."""
+    return (config_dir or _config_dir()) / "config.toml"
+
+
 def _read_toml(config_dir: Path) -> dict[str, object]:
-    path = config_dir / "config.toml"
+    path = config_file(config_dir)
     if not path.exists():
         return {}
     try:

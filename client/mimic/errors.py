@@ -9,6 +9,19 @@ class MimicError(Exception):
     """Base class for all mimic-tts client errors."""
 
 
+class MimicConnectionError(MimicError):
+    """The server could not be reached at all — no HTTP response came back."""
+
+    def __init__(self, server_url: str, reason: str) -> None:
+        super().__init__(f"cannot reach mimic server at {server_url}: {reason}")
+        self.server_url = server_url
+        self.reason = reason
+
+
+class MimicTimeoutError(MimicConnectionError):
+    """The server accepted the connection but did not answer in time."""
+
+
 class MimicAPIError(MimicError):
     """Server returned a non-2xx response."""
 
