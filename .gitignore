@@ -43,3 +43,6 @@ voices/
 
 # Subagent-driven-development scratch (ledgers, briefs, review packages)
 .superpowers/
+
+# Per-machine Claude Code settings (permissions etc.) — not shared
+.claude/
