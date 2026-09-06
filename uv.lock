@@ -756,7 +756,7 @@ wheels = [
 
 [[package]]
 name = "mimic-server"
-version = "0.2.1"
+version = "0.2.2"
 source = { editable = "server" }
 dependencies = [
     { name = "chatterbox-tts" },
@@ -800,7 +800,7 @@ provides-extras = ["dev"]
 
 [[package]]
 name = "mimic-tts"
-version = "0.2.1"
+version = "0.2.2"
 source = { editable = "client" }
 dependencies = [
     { name = "httpx" },
